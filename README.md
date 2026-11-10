@@ -67,17 +67,8 @@ Four rules hold it together:
 
 ## Install
 
-```bash
-pnpm add dsh-patrol
-```
-
-Then insert the bundle in your profile patch:
-
-```yaml
-- insert:
-    - id: dsh-patrol
-      name: dsh-patrol
-```
+Install into the host, then enable the bundle in the profile patch — the whole sequence, a
+minimal config and the uninstall steps are in [Install & configure](#install--configure).
 
 ## Configuration
 
@@ -102,7 +93,9 @@ nothing, so a table of directions can be run in shadow mode first and only then 
 
 ## Shadow run against a real table
 
-`observe` mode is meant to be run against a live table before anything is allowed to start:
+`observe` mode is meant to be run against a live table before anything is allowed to start
+(`scripts/` ships only in a clone: a tarball install has no `scripts/` directory — see
+[Install & configure](#install--configure)):
 
 ```bash
 export PATROL_BASE_TOKEN=<base token>
@@ -183,7 +176,8 @@ Each line carries `ts`, `roundId`, `verdict`, `reason`, `threadKey`, `triggerId`
 {"ts":"2026-11-10T14:33:42.920Z","roundId":"rnd_20261110T010000Z_1","verdict":"observed","reason":"held-by-mode:observe","threadKey":"patrol:rec1","triggerId":"rec1","evalId":"eval_3ff45714ea4c","wouldAccept":{"title":"补齐审计脚本","scope":"D:\\gitAll\\demo","rules":["next-step-present"]}}
 ```
 
-Reading it back is what turns `observe` mode into a decision:
+Reading it back is what turns `observe` mode into a decision (`scripts/policy-audit.mjs` is also
+clone-only, for the same reason):
 
 ```bash
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions.jsonl          # readable summary
@@ -280,6 +274,117 @@ pnpm test -- same-repo                # 同一套场景的 vitest 入口（共�
 `lark-cli` installs as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot spawn by bare
 name — the Bitable source goes through `cmd.exe` on Windows and uses the plain binary elsewhere.
 Override with `LARK_CLI=/path/to/lark-cli`.
+
+## Install & configure
+
+### What DSH 0.2.1-alpha.2 loads, and from where
+
+This is a **bundle layer**, not a library to `import` by hand. `package.json` declares the DSH
+bundle entry — `dsh.bundle.patch` → `./cordis.patch.yml`, `manifestVersion: 1` — and that patch is
+what the host reads. It deliberately carries no configuration: `cordis.patch.yml:4-5` says which
+table to read, which policy version and where work goes come from the **profile**, not from the
+patch. So installing the package is what *loads* the plugin; configuring the profile is what makes
+it do work.
+
+The same patch declares the agent preset every worker Session runs under
+(`@deepseek-ai/dsh-agent-preset`, id `dsh-patrol-worker`) and the shell / fs / skill tools that
+preset needs. Nothing else has to be inserted by hand.
+
+The packaged skill needs no separate install either. DSH's filesystem skill provider only scans
+workspaces, so the plugin registers `skills/dsh-patrol/SKILL.md` itself at load time
+(`src/index.ts:177-186`; `readPackagedSkill` reads `../skills/<name>/SKILL.md` relative to
+`lib/index.js`, `src/skill.ts:30-31`).
+
+### 1. Install the package
+
+Nothing is on a registry yet, so install the tarball this repo builds:
+
+```powershell
+pnpm pack --pack-destination .\dist       # runs `prepare` first, so lib/ is built from src/
+pnpm add .\dist\dsh-patrol-0.1.0.tgz    # run in the project that hosts DSH
+# after the first publish: pnpm add dsh-patrol@0.1.0
+```
+
+The peers are supplied by the host, not by this package: `@deepseek-ai/cordis@4.0.5-alpha.1` and
+`@deepseek-ai/dsh-agent` / `dsh-session` / `dsh-skill@0.2.1-alpha.2`. Node must satisfy
+`^22.19.0 || >=24.0.0`.
+
+### 2. Enable the bundle
+
+```yaml
+- insert:
+    - id: dsh-patrol
+      name: dsh-patrol
+```
+
+### 3. A minimal configuration
+
+`local-json` is the shortest path to a real round — no Feishu account, no `lark-cli`. Every key
+below is spelled exactly as in the config schema (line numbers are `src/index.ts`):
+
+```yaml
+- insert:
+    - id: dsh-patrol
+      name: dsh-patrol
+      config:
+        kind: local-json                       # Config.kind            src/index.ts:30
+        tasksFile: .artifacts/directions.json  # Config.tasksFile       src/index.ts:36
+        autonomousRepos:                       # Config.autonomousRepos src/index.ts:56
+          - 'D:\gitAll\dsh-patrol'
+        acceptMode: observe                    # Config.acceptMode      src/index.ts:44
+        roundIntervalMs: 600000                # Config.roundIntervalMs src/index.ts:63
+```
+
+- `kind` / `tasksFile` — the source. `local-json` reads a file holding an array of items, each in
+the `schemas/item.schema.json` shape.
+- `autonomousRepos` — the allowlist. **Empty refuses, it never widens** (`repo-allowlist-unset`);
+a row outside every prefix is `repo-not-autonomous`, refused before assessment.
+- `acceptMode: observe` — the default, and where a new install should start: every row is judged,
+what *would* be accepted is recorded, no Ticket opens.
+- `roundIntervalMs` — how often a round runs; the schema's floor is `1000`. `600000` is 10 minutes.
+
+Worth setting on a first run: `decisionLogPath` (`src/index.ts:49`), which appends one JSONL line
+per decision so an `observe` round can be read back instead of guessed.
+
+### 4. `ticket-already-open` is per repo, not per process
+
+A direction table often holds several rows pointing at the same repo, and one row is one thread —
+so "one line of work per thread" is not "one line of work per repo". Since v3 the refusal is
+decided on the repo: an open Ticket holds its `repoPath`, and a second row for that repo is
+`ignored` / `ticket-already-open` (`src/core/policy.ts:119-124`, `holdsRepo` at
+`src/core/policy.ts:171-176`). Rows pointing at other repos are untouched. An `ended` Ticket holds
+nothing, so the row may open again — with a new generation id `…-r2`, `…-r3`
+(`src/core/engine.ts:227-229`), because the ended record is kept. The check runs again against the
+current ticket set right before `openTicket()` (`src/core/engine.ts:166`), since the Assessment in
+between is awaited.
+
+A Ticket that predates `repoPath` cannot be attributed to a repo, so it blocks its own thread; with
+no thread either, it blocks everything. An unattributable open Ticket must never be the hole a
+second line opens through.
+
+All of this is single-process, one `Engine` instance: Tickets live in memory, so two hosts running
+the same table share nothing. Run one instance per repo set.
+
+### 5. What is in the tarball, and what is not
+
+`files` ships `lib/`, `cordis.patch.yml`, `README.md`, `CHANGELOG.md`, `docs/` and `skills/` (plus
+`LICENSE` and `package.json`, which npm/pnpm always include). `src/`, `tests/`, `schemas/` and
+`scripts/` stay in the source repo:
+
+- `schemas/item.schema.json` exists **only in the source repo**, for contract validation: it is
+read by `tests/contract.spec.ts` and `tests/schema-parity.spec.ts`, never by `lib/index.js`, whose
+only file read is `../skills/<name>/SKILL.md` (`lib/index.js:886`).
+- `scripts/` holds maintainer tools (`shadow-run.mjs`, `policy-audit.mjs`, `same-repo-rehearsal.ts`).
+A packaged install has no `scripts/` directory, so run them from a clone.
+
+### 6. Uninstall
+
+1. Remove the `dsh-patrol` insert from the profile patch and restart DSH. Unloading clears the
+interval and awaits the round in flight, so no write-back is lost half way
+(`src/index.ts:206-210`); the `dsh-patrol-worker` preset is part of the same layer and goes with it.
+2. `pnpm remove dsh-patrol` in the host project.
+3. Nothing else is left behind except files you asked for: the `decisionLogPath` JSONL — delete it
+if you no longer want the history. Tickets live in memory only, so a restart starts empty.
 
 ## Verification
 

@@ -5,6 +5,23 @@
   "version": "0.1.0",
   "private": false,
   "description": "A DSH plugin that turns a row-based task source (Feishu Bitable / local JSON) into DSH-native Triggers, admits them under a versioned Policy, opens Tickets and dispatches bounded work — the superagent domain model wired to a real spreadsheet source.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "patrol",
+    "bitable",
+    "feishu",
+    "task-source",
+    "proactive-agent",
+    "automation"
+  ],
+  "homepage": "https://github.com/yangpeng366/dsh-patrol",
+  "repository": {
+    "type": "git",
+    "url": "ssh://git@ssh.github.com:443/yangpeng366/dsh-patrol.git"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -19,6 +36,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "docs",
     "skills"
   ],
@@ -32,8 +50,7 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
-,
+    "check": "pnpm typecheck && pnpm test && pnpm build",
     "prepare": "pnpm build"
   },
   "engines": {
