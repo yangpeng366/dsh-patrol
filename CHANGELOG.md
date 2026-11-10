@@ -7,6 +7,19 @@
 条目只写已经落进代码、并有过测试或演练证据的行为；计划中的能力不进本文件。
 每条末尾的短哈希指向本仓提交，便于回溯。
 
+## [Unreleased]
+
+### Added
+
+- `scripts/release-check.mjs`：发布前一条命令完成 `pnpm typecheck` / `test` / `build`、`pnpm pack`
+  到系统临时目录、tarball 必需内容（`package.json`、`lib/index.js`、`lib/index.d.ts`、`lib/cli.js`、
+  `cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`skills/dsh-patrol/SKILL.md`）与禁入内容
+  （`src/`、`tests/`、`scripts/`、`schemas/`、`node_modules`、压缩/日志/临时残留）的校验，并从解包目录
+  真实启动 `lib/cli.js`，最后核对 `package.json.version` 等于 `CHANGELOG.md` 最新 `## [x.y.z]`。
+  通过时打印 `RESULT: PASS` 与一行 JSON（含 tarball SHA256、字节数、文件数），失败非零退出并指出
+  具体检查项；临时目录无论成败都清理（`--keep-temp` 可保留）。不发布、不改 registry、不打 tag。
+- README 的 Verification 段补上这条命令，并写清它验证什么、不验证什么。
+
 ## [0.1.0] - 2026-11-11
 
 首个可安装版本。Policy 版本为 `v3`，仓库白名单默认拒绝（fail-closed）。

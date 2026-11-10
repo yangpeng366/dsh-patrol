@@ -430,6 +430,31 @@ pnpm build       # tsdown
 
 Current state: typecheck clean, 81 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
+One command runs all three and then judges the artifact itself (`scripts/` is clone-only, so this is
+for a clone, not for an install):
+
+```bash
+node scripts/release-check.mjs        # 0 = PASS, 1 = a named check failed, 2 = usage error
+```
+
+It verifies: the three gates above pass; `pnpm pack` into the system temp directory produces exactly
+one tarball and leaves none in the repo; the tarball contains `package/package.json`,
+`package/lib/index.js`, `package/lib/index.d.ts`, `package/lib/cli.js`, `package/cordis.patch.yml`,
+`package/README.md`, `package/CHANGELOG.md` and `package/skills/dsh-patrol/SKILL.md`; it contains
+none of `package/src/`, `package/tests/`, `package/scripts/`, `package/schemas/`, `node_modules`, or
+archive/log/temp residue; `lib/cli.js` starts from the *unpacked* tarball with no repo
+`node_modules` on the resolution path — run as `--help` and as a real `rows` read, and checked
+statically to import only `node:` builtins and its own chunk; and `package.json.version` is the
+newest `## [x.y.z]` heading in `CHANGELOG.md`. It prints the tarball's SHA256, byte count and file
+count, then one `RESULT: PASS` line and one line of JSON; a failure exits non-zero and names the
+check (`content:required`, `content:forbidden`, `cli:help`, `version:changelog`, …). `--keep-temp`
+keeps the pack and unpack directory for triage; the temp directory is removed otherwise.
+
+What it does **not** verify: installing the tarball into a DSH host (the live-host run below is the
+evidence for that), the Bitable/`lark-cli` network path, the presence of the DSH peer packages, or
+runtime behaviour against a real direction table. It also does not publish, tag or commit anything —
+the tarball it builds lives in the temp directory and is thrown away.
+
 What the tests actually pin down: the Gate's refusals (needs-approval, read-only, approval state,
 no next step, ticket already open, paused), the v3 repo default (empty allowlist refuses, explicit
 `allowAnyRepo` is the only way back, prefix hit/miss and case/separator normalisation, the repo
