@@ -7,6 +7,11 @@
  */
 import type { Mandate, Strength, Thread, Ticket, Trigger } from './model.ts'
 
+/** One comparable form for a repo path: case, separator and trailing slashes all drop. */
+function normaliseRepo(repo: string): string {
+  return repo.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+}
+
 /** Gate verdict: inadmissible with a reason, or admissible with a strength and the basis recorded. */
 export type GateResult =
   | { admissible: false; reason: string }
@@ -41,6 +46,11 @@ export interface DirectionFacts {
   nextStepPresent: boolean
   /** Whether the row asks for a dry run. */
   fake: boolean
+  /**
+   * Where the row's work lives, exactly as the source wrote it. Only the repo rules read it,
+   * and only when the Policy was given an allowlist; without one the field is ignored.
+   */
+  repoPath?: string
 }
 
 /**
@@ -58,12 +68,26 @@ export class DirectionPolicy implements Policy {
   /** Rules an inferred candidate may be accepted on, when the collaboration mode allows it. */
   readonly inferredRules: readonly string[]
   readonly evalTimeoutMs: number
+  /**
+   * Repo prefixes an unattended round may act inside. Empty means "no repo restriction",
+   * which is the behaviour every earlier Policy had. Prefixes are compared after
+   * normalising separators and case, so `D:/gitAll/openeyes` and `d:\gitall\openeyes` agree.
+   */
+  readonly autonomousRepos: readonly string[]
 
-  constructor(options: { version: string; paused?: boolean; inferredRules?: readonly string[]; evalTimeoutMs?: number }) {
+  constructor(options: {
+    version: string
+    paused?: boolean
+    inferredRules?: readonly string[]
+    evalTimeoutMs?: number
+    /** Repo prefixes an unattended round may act inside; empty means no restriction. */
+    autonomousRepos?: readonly string[]
+  }) {
     this.version = options.version
     this.paused = options.paused ?? false
     this.inferredRules = options.inferredRules ?? ['next-step-present']
     this.evalTimeoutMs = options.evalTimeoutMs ?? 120_000
+    this.autonomousRepos = (options.autonomousRepos ?? []).map(normaliseRepo).filter(Boolean)
   }
 
   gate(trigger: Trigger, thread: Thread, tickets: Ticket[]): GateResult {
@@ -76,6 +100,9 @@ export class DirectionPolicy implements Policy {
     if (facts.authorization === '只读') return { admissible: false, reason: 'read-only-direction' }
     if (facts.authorization === '需审批') return { admissible: false, reason: 'needs-approval' }
     if (!facts.nextStepPresent) return { admissible: false, reason: 'no-next-step' }
+
+    const repoRefusal = this.refuseRepo(facts)
+    if (repoRefusal) return { admissible: false, reason: repoRefusal }
 
     const open = tickets.filter((ticket) => ticket.status !== 'ended')
     if (open.length > 0) return { admissible: false, reason: 'ticket-already-open' }
@@ -93,6 +120,24 @@ export class DirectionPolicy implements Policy {
     if (mandate.basis.policyVersion === this.version) return true
     // A newer Policy does not revoke a granted Mandate; it only refuses to widen it.
     return mandate.strength === 'explicit'
+  }
+
+  /**
+   * The repo-layer refusal, or nothing when the row may proceed.
+   *
+   * An allowlist is opt-in: with none configured every row keeps the old behaviour. With one,
+   * a row that names no repo, names an uncloned repo, or points outside every prefix is refused
+   * before it can reach the Assessment. This is the rule that keeps 现场 repositories and rows
+   * whose scope is a sentence out of an unattended round.
+   */
+  private refuseRepo(facts: DirectionFacts): string | undefined {
+    if (this.autonomousRepos.length === 0) return undefined
+    const raw = String(facts.repoPath ?? '').trim()
+    const repo = normaliseRepo(raw)
+    if (!repo) return 'no-repo-path'
+    if (raw.startsWith('（未克隆）') || raw.startsWith('(未克隆)')) return 'repo-not-cloned'
+    const inside = this.autonomousRepos.some((prefix) => repo === prefix || repo.startsWith(`${prefix}\\`))
+    return inside ? undefined : 'repo-not-autonomous'
   }
 
   admitsInferred(rules: readonly string[]): boolean {

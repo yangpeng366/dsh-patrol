@@ -1,5 +1,23 @@
 // One observe-mode shadow round against the real direction table: read-only, no dispatch, no write-back.
-import { BitableSource, DirectionPolicy, Engine, itemToTrigger } from '../lib/index.js'
+//
+//   node scripts/shadow-run.mjs --log .artifacts/patrol-decisions.jsonl
+//
+// A round normally exists only in the host log. With --log (or PATROL_DECISION_LOG) every
+// DecisionRecord also lands in an append-only JSONL file, so scripts/policy-audit.mjs can
+// read the round back and list what observe mode held for review.
+import { BitableSource, createDecisionLog, createEngine, itemToTrigger } from '../lib/index.js'
+
+function arg(name, fallback = '') {
+  const index = process.argv.indexOf(`--${name}`)
+  return index >= 0 ? String(process.argv[index + 1] ?? fallback) : fallback
+}
+
+const logPath = arg('log', process.env.PATROL_DECISION_LOG ?? '')
+const policyVersion = arg('policy', 'shadow-2026-11-10')
+const autonomousRepos = arg('repos', process.env.PATROL_AUTONOMOUS_REPOS ?? '')
+  .split(/[;,]/)
+  .map((repo) => repo.trim())
+  .filter(Boolean)
 
 const source = new BitableSource({
   baseToken: process.env.PATROL_BASE_TOKEN,
@@ -8,9 +26,19 @@ const source = new BitableSource({
 })
 
 const decisions = []
-const policy = new DirectionPolicy({ version: 'shadow-2026-11-10' })
-const engine = new Engine({
-  policy,
+// createEngine only reads the policy name, pause flag and accept mode here; decisionLogPath is
+// what createDecisionLog turns into a log, so both paths stay on the plugin's own wiring.
+const config = {
+  policyVersion,
+  paused: false,
+  acceptMode: 'observe',
+  decisionLogPath: logPath,
+  autonomousRepos,
+}
+const decisionLog = createDecisionLog(config, {
+  onError: (error) => console.error(`decision log write failed: ${String(error)}`),
+})
+const engine = createEngine(config, {
   assessor: {
     assess: async (candidate) => {
       const trigger = candidate.triggers[0]
@@ -25,15 +53,16 @@ const engine = new Engine({
       }
     },
   },
-  acceptMode: 'observe',
   onDecision: (d) => decisions.push(d),
+  decisionLog,
 })
 
 const items = await source.listItems()
 console.log(`rows read = ${items.length}`)
 const now = new Date()
 for (const item of items) {
-  if (!item.nextStep.trim()) continue
+  // Rows without a next step still get a Trigger, so the audit records why they were ignored
+  // instead of dropping them before the Gate ever sees them.
   engine.receive(itemToTrigger(item, now.toISOString()))
 }
 const summary = await engine.runRound(now)
@@ -41,8 +70,12 @@ console.log(`evaluated=${summary.evaluated} observed=${summary.observed} ignored
 const byReason = {}
 for (const d of decisions) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1
 console.log('reasons =', JSON.stringify(byReason))
+console.log(`autonomous repos = ${autonomousRepos.length ? autonomousRepos.join(' | ') : '(no allowlist: every row eligible)'}`)
 console.log('would-accept (held for review):')
 for (const d of decisions.filter((x) => x.verdict === 'observed')) {
   console.log(`  ${d.threadKey} :: ${d.wouldAccept?.title ?? ''} :: ${d.wouldAccept?.scope ?? ''}`)
 }
 console.log(`tickets opened = ${engine.tickets().length}  (observe mode must open none)`)
+console.log(logPath
+  ? `decisions logged to ${logPath} (${decisions.length} this round) - audit with: node scripts/policy-audit.mjs --file ${logPath}`
+  : 'no decision log written (pass --log <path> to keep this round)')

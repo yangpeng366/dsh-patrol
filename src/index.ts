@@ -47,6 +47,12 @@ export const Config = z.object({
    * old behaviour exactly. A relative path resolves against the process working directory.
    */
   decisionLogPath: z.string().default(''),
+  /**
+   * Repo prefixes an unattended round may act inside. Empty means "no repo restriction" (the
+   * old behaviour). Once set, a row with no repo, an uncloned repo, or a repo outside every
+   * prefix is refused by the Gate before assessment - 现场 repositories stay out by default.
+   */
+  autonomousRepos: z.array(z.string()).default([]),
   /** How often a round runs. */
   roundIntervalMs: z.number().int().min(1_000).default(600_000),
   /** Where admitted work goes. */
@@ -119,7 +125,11 @@ export function createEngine(
     decisionLog?: DecisionLog
   } = {},
 ): Engine {
-  const policy = new DirectionPolicy({ version: config.policyVersion, paused: config.paused })
+  const policy = new DirectionPolicy({
+    version: config.policyVersion,
+    paused: config.paused,
+    autonomousRepos: config.autonomousRepos,
+  })
   const dispatcher = options.dispatcher ?? new LogDispatcher()
   const decisionLog = options.decisionLog
   return new Engine({

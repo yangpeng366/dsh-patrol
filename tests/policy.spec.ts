@@ -93,3 +93,44 @@ describe('DirectionPolicy.revalidate', () => {
     expect(policy.revalidate(mandate)).toBe(false)
   })
 })
+
+describe('DirectionPolicy repo allowlist', () => {
+  const policy = new DirectionPolicy({
+    version: 'v2',
+    autonomousRepos: ['D:\\gitAll\\dsh-patrol', 'E:/gitAll/openeyes/'],
+  })
+
+  it('admits a row inside an allowlisted repo, separators and case ignored', () => {
+    expect(policy.gate(facts({ repoPath: 'd:/gitall/dsh-patrol' }), thread, []).admissible).toBe(true)
+    expect(policy.gate(facts({ repoPath: 'E:\\gitAll\\openeyes' }), thread, []).admissible).toBe(true)
+    expect(policy.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol\\src\\core' }), thread, []).admissible).toBe(true)
+  })
+
+  it('refuses a row whose repo is outside every prefix', () => {
+    const result = policy.gate(facts({ repoPath: 'E:\\repos\\gitAll\\articleeditor-tmp' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-not-autonomous')
+  })
+
+  it('does not read a sibling with the same prefix as inside', () => {
+    const result = policy.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol-old' }), thread, [])
+    expect(result.admissible).toBe(false)
+  })
+
+  it('refuses a row that names no repo at all', () => {
+    const result = policy.gate(facts({ repoPath: '   ' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('no-repo-path')
+  })
+
+  it('refuses a repo the table itself marks as not cloned', () => {
+    const result = policy.gate(facts({ repoPath: '（未克隆）https://github.com/x/y' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-not-cloned')
+  })
+
+  it('keeps every row eligible when no allowlist is configured', () => {
+    const open = new DirectionPolicy({ version: 'v1' })
+    expect(open.gate(facts({ repoPath: '' }), thread, []).admissible).toBe(true)
+  })
+})

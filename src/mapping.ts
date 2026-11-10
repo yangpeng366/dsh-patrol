@@ -29,6 +29,7 @@ export function itemFacts(item: DirectionItem): DirectionFacts {
     priority: item.priority,
     fake: item.fake,
     nextStepPresent: item.nextStep.trim().length > 0,
+    repoPath: item.repoPath,
   }
 }
 

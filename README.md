@@ -89,6 +89,7 @@ Then insert the bundle in your profile patch:
 | `paused` | `false` | a paused Policy admits nothing but keeps its rules |
 | `acceptMode` | `observe` | `off` / `observe` / `auto` |
 | `decisionLogPath` | — (off) | append-only JSONL of every decision; relative paths resolve against the process working directory |
+| `autonomousRepos` | `[]` | repo prefixes an unattended round may act inside; empty means no restriction, and once set a row with no repo, an uncloned repo, or a repo outside every prefix is refused |
 | `roundIntervalMs` | `600000` | how often a round runs |
 | `dispatcher` | `log` | `log` / `codex` / `dsh` |
 
@@ -120,6 +121,28 @@ tickets opened = 0  (observe mode must open none)
 ```
 
 The nine refusals are the Gate doing its job: eight rows are `授权边界=只读` and one is `需审批`.
+
+That first number was the reason for the repo rule. Sixty-eight rows carried a next step, but they
+included 23 rows pointing at 现场 repositories and 8 whose `仓库路径` was a sentence rather than a
+path - none of which should ever start unattended. Set `autonomousRepos` and the Gate refuses
+those rows before assessment (`no-repo-path`, `repo-not-cloned`, `repo-not-autonomous`):
+
+```bash
+node scripts/shadow-run.mjs --log .artifacts/patrol-decisions.jsonl \
+  --repos 'D:\gitAll\dsh-patrol;D:\gitAll\patrol-scaffold;E:\gitAll\openeyes'
+```
+
+Same table, same day, with a 15-repo allowlist:
+
+```
+evaluated=78 observed=16 ignored=62 admitted=0
+reasons = {"held-by-mode:observe":16,"repo-not-autonomous":42,"no-repo-path":8,
+           "read-only-direction":8,"repo-not-cloned":2,"no-next-step":1,"needs-approval":1}
+```
+
+The allowlist is opt-in on purpose: with `autonomousRepos` empty every row keeps the old
+behaviour, so an existing host does not change meaning on upgrade. `--log` writes the same
+append-only JSONL the plugin writes, so `scripts/policy-audit.mjs` can read a shadow round back.
 
 ## Decision audit（决策审计）
 
