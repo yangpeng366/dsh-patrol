@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -6,7 +6,7 @@ import { Engine } from '../src/core/engine.ts'
 import { DirectionPolicy } from '../src/core/policy.ts'
 import { LogDispatcher } from '../src/dispatch.ts'
 import { PatrolRunner } from '../src/runner.ts'
-import { LocalJsonSource } from '../src/source/local-json.ts'
+import { LocalJsonFileSource, LocalJsonSource } from '../src/source/local-json.ts'
 
 async function fixture(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-patrol-test-'))
@@ -69,5 +69,31 @@ describe('PatrolRunner', () => {
     const second = await runner.runOnce()
     expect(second.admitted).toBe(0)
     expect(dispatcher.seen).toHaveLength(1)
+  })
+
+  it('writes the stage and the achievement back without touching the row\'s own next step', async () => {
+    const file = await fixture()
+    const source = new LocalJsonFileSource({ path: file })
+    const writeBackErrors: string[] = []
+    const engine = new Engine({
+      policy: new DirectionPolicy({ version: 'v1', allowAnyRepo: true }),
+      assessor: { assess: async () => ({ kind: 'accept', title: '到期方向', scope: 'D:\\gitAll\\demo', reason: 'ok', rules: ['next-step-present'] }) },
+      acceptMode: 'auto',
+      now: () => new Date('2026-11-10T02:00:00.000Z'),
+    })
+    const runner = new PatrolRunner({
+      source,
+      engine,
+      dispatcher: new LogDispatcher(),
+      now: () => new Date('2026-11-10T02:00:00.000Z'),
+      onWriteBackError: (itemId) => writeBackErrors.push(itemId),
+    })
+    await runner.runOnce()
+    const rows = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>[]
+    const row = rows.find((entry) => entry['id'] === 'rec-due')!
+    expect(writeBackErrors).toEqual([])
+    // The scope is not the row's next action: it must survive a round untouched.
+    expect(row['nextStep']).toBe('做掉它')
+    expect(String(row['achievement'])).toMatch(/^logged tkt_/)
   })
 })

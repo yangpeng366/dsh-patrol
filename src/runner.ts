@@ -53,7 +53,8 @@ export class PatrolRunner {
       try {
         await this.options.source.writeBack(ticket.sourceItemId, {
           currentStage: ticket.stage,
-          nextStep: ticket.mandate.scope,
+          // `下一步` is the row's own next action, and the round does not know it: writing the
+          // Ticket's scope here replaced a real next step (`跑一轮 dry-run`) with the repo path.
           achievement: result.detail.slice(0, 2000),
         })
       } catch (error) {
