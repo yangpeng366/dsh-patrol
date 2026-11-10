@@ -90,6 +90,14 @@ describe('patrol CLI', () => {
     const rows = JSON.parse(await readFile(tasksFile, 'utf8')) as Array<Record<string, unknown>>
     expect(rows[0]?.['achievement']).toBe('[2026-11-11 03:20]\n来自标准输入')
   })
+
+  it('strips a UTF-8 BOM from an achievement file so it never reaches the cell', async () => {
+    const file = join(dir, 'with-bom.md')
+    await writeFile(file, '\uFEFF带 BOM 的结果', 'utf8')
+    expect(await main(['report', 'row-1', '--achievement-file', file], io, deps())).toBe(0)
+    const rows = JSON.parse(await readFile(tasksFile, 'utf8')) as Array<Record<string, unknown>>
+    expect(rows[0]?.['achievement']).toBe('[2026-11-11 03:20]\n带 BOM 的结果')
+  })
 })
 
 describe('resolveSettings', () => {

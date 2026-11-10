@@ -222,9 +222,14 @@ async function resolveAchievementText(flags: Record<string, FlagValue>, deps: Cl
   const file = flagString(flags, 'achievement-file')
   const inline = flagString(flags, 'achievement')
   if (file !== undefined && inline !== undefined) throw new CliError('--achievement 与 --achievement-file 只能给一个')
-  if (file !== undefined) return readFile(file, 'utf8')
-  if (inline === '-') return (deps.readStdin ?? readStdinAll)()
+  if (file !== undefined) return stripBom(await readFile(file, 'utf8'))
+  if (inline === '-') return stripBom(await (deps.readStdin ?? readStdinAll)())
   return inline
+}
+
+/** A UTF-8 BOM is invisible in an editor but would land in the cell as U+FEFF. */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
 function has(flags: Record<string, FlagValue>, name: string): boolean {
