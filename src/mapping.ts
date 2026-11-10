@@ -21,6 +21,10 @@ export function itemFingerprint(item: DirectionItem, repoState: 'exists' | 'miss
     // new Trigger, or the row that was refused as `schedule-stopped` could never be re-judged.
     item.intervalMin,
     item.repoPath, item.lastRun ?? '',
+    // The structured action kind is state too: writing `repo-code` into a row that read as 现场 must
+    // re-judge it, not be swallowed as a duplicate Trigger. Blank and absent hash the same, so a
+    // table without the column produces exactly the ids it produced before the column existed.
+    item.actionType ?? '',
     // Repo existence is state too (Policy v4): cloning `D:\gitAll\patrol-scaffold` after the row
     // was refused as `repo-missing` must re-judge the row, and `receive()` dedupes by Trigger id.
     // The parameter is explicit so `itemFingerprint()` stays a pure function of its arguments.
@@ -37,11 +41,13 @@ export function itemRepoFact(item: DirectionItem, options: RepoInspectOptions = 
 /**
  * The row's action type, read once.
  *
- * Six of the row's own cells go in, in the table's own words: the classifier decides what each one
- * is allowed to say (§6.2 of the triage doc). Nothing here reads a file or calls a model.
+ * The structured `动作类型` cell goes in first and, when it holds a kind, it *is* the answer. The
+ * six free-text cells are the fallback: they are what decides a row whose column is absent, blank
+ * or unreadable (§6.2 of the triage doc). Nothing here reads a file or calls a model.
  */
 export function itemActionFact(item: DirectionItem): ActionFacts {
   return inspectAction({
+    actionType: item.actionType,
     nextStep: item.nextStep,
     description: item.description,
     userNote: item.userNote,

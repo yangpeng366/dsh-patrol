@@ -340,8 +340,9 @@ still-auto=7
 
 ### 6.2 `action-type`：动作类型、代码与 78 行的实测
 
-`src/core/action-facts.ts` 把一行方向表的**六个已有单元格**读成一个事实：`下一步` / `简要描述` /
-`用户批注` / `授权边界` / `贡献类型` / `审批状态`。
+`src/core/action-facts.ts` 把一行方向表读成一个事实，路径有两条：先读结构化列「动作类型」（列里有合法值就用它，
+`source=column`）；列不存在或为空，再读**六个已有单元格** `下一步` / `简要描述` / `用户批注` / `授权边界` /
+`贡献类型` / `审批状态`（`source=text`）。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -351,12 +352,30 @@ still-auto=7
 | `field` | 证据来自哪一格（表格自己的列名） |
 | `reason` | 为什么是这个 kind；`unclear` 时写明缺哪一格的什么 |
 | `alternatives` | 其余也命中的 kind，按最严在前，供审计 |
+| `source` | `column` / `text`：这一行的结论是表里写死的，还是从文字推出来的 |
+
+**列优先、词表兜底。** 方向表新增了结构化列「动作类型」，允许值就是上表的 `kind` 集合。规则四条：
+
+- **列值就是事实。** 列里有合法值时，`kind` 直接取列值，`source=column`，`field=动作类型`，`matched` 为空
+  （没有词命中，也不需要）。此时 `下一步` 写「发版」「等用户拍板」都不改判：词表的判法留在 `alternatives`
+  里，分歧可查但不作数。`下一步` 仍须非空——那是 Gate 的另一道检查（`no-next-step`），与本模块无关。
+- **空列退回词表。** 列不存在、单元格为空都算「没有结构化答案」，走原来的词表推断，`source=text`，
+  `reason` 写明「列值为空，已退回词表推断」。列不存在时行为与 d02b152 逐字一致（既有 167 例作回归）。
+- **非法列值即 `unclear`。** 列里写了 `auto`、`待定`、`Repo Code` 这类不在允许集合里的值，判 `unclear`、
+  `source=column`，`reason` 写出该值与允许集合，**不退回词表**：退回词表可能把打错字重新读成 `repo-code`，
+  而那正是本模块要防的静默放行。
+- **容错只限大小写与首尾空白**（`Repo-Code` = `repo-code`），除此之外不猜。
+
+计数口径（`triage-action` 块）：`kind-*` 按 `kind` 计，与来源无关；`source-column` / `source-text` 按
+`ActionFacts.source` 计，两者之和恒等于 `records`。列值非法而判 `unclear` 的行计入 `source-column`：
+结论是那一列给的，不是词表给的。决策日志的每一行也带 `actionSource`，同样的区分在日志里可查。
 
 准入与拒绝的规矩是**不对称**的，写成代码而不是猜：
 
 - **准入只认 `下一步`**。`简要描述` 是题目不是动作（"机构 API Key 存 DB" 说的是这个仓是什么，
   不是这一步要 key），`用户批注` 是历史流水（只用来发现「还在等人拍板」的话）。所以 `用户批注` 里的
-  「代码」永远不能让一行通过。
+  「代码」永远不能让一行通过。唯一的例外是结构化列：列里写死的仓内 kind 本来就没有命中词，
+  `refuseAction()` 只在 `source=column` + `field=动作类型` + `evidence` 非空时才豁免「缺词」这条拒法。
 - **拒绝可以来自任何一格**。密钥 / 现场 / 发布 / 配置 / 拍板，任一格里出现就够了。
 - **最严者胜**：secret → field-ops → config → release → decision → repo-code → repo-test → repo-doc。
   「代码已就位，等用户拍板」是 `decision`，不是 `repo-code`。
@@ -376,6 +395,8 @@ kind-repo-code=9
 kind-repo-doc=3
 kind-repo-test=2
 kind-config=2
+source-column=0
+source-text=78
 ```
 
 结论三句：
@@ -387,14 +408,15 @@ kind-config=2
    `action-field-ops` / `action-release` / `action-needs-config` / `action-needs-decision`。
 3. **这仍是事实，不是许可**。事实带 evidence，Gate 只在有证据时才拒（缺证据 = `unclear` = 拒），不因为
    「看着像仓内」就放行；但它是从自由文本推的，词表会漏（「去 45 环境看一眼」判 field-ops，
-   「回头看一眼」不判），也会把「这步要发版」藏在别的说法里漏判。要彻底消除这类误判，仍需方向表新增
-   结构化「动作类型」列（§7），届时本模块降级为该列的预填工具。
+   「回头看一眼」不判），也会把「这步要发版」藏在别的说法里漏判。**结构化列已在代码里落地**：
+   `动作类型` 有合法值时列值优先，`source=column`，词表只做兜底与预填。本轮实测 `source-column=0` /
+   `source-text=78`：方向表这一列还没填，所以 78 行仍然全部是词表推的——下面这些数在列回填后要重算。
 
 ## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
 | 缺的事实 | 谁产 | 用在哪 | 不补的后果 |
 | --- | --- | --- | --- |
 | `repoExists`（存在且是目录） | **已落地**：`inspectRepoPath()`，`itemToTrigger()` 每轮探测一次，写进 `DirectionFacts`（§6.1） | `auto` 的「真实存在的本地仓」 | 已补齐；它只证明「这一格是一个可达目录」，不证明「是 git 仓 / 是本行的仓」（§9.4） |
-| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | **已落地（事实版）**：`inspectAction()`，`itemToTrigger()` 每轮算一次，写进 `DirectionFacts`（§6.2）；方向表新增结构化列仍待补 | `auto` 的「下一步是仓内可验证的改动」 | 词表漏判仍在；结构化列到位后本模块降级为预填工具（§6.2 结论 3） |
+| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | **已落地**：结构化列 + `inspectAction()`。列里有合法值即 `source=column`，列缺失/为空才走词表（`source=text`），每轮写进 `DirectionFacts`（§6.2） | `auto` 的「下一步是仓内可验证的改动」 | 列值写错时判 `unclear` 而不是猜；列未回填时仍是词表预测（本轮 `source-column=0`） |
 | 纯路径列（与注释分开） | 方向表 | 同上 | 「路径 + 注释」混写让存在性探测误判（3 条样本） |
 | 「观察」标记 | 方向表 | `read-only`（维护 + 只复核） | 口径第 2 条后半句无法结构化，只能人判 |
 | 巡检间隔「0」与「空」的区分 | 方向表 / `normalizeItem` | 审计可读性 | 两者都拒绝（fail-closed），但日志里分不清「明确停跑」与「忘了填」 |
@@ -403,15 +425,15 @@ kind-config=2
 不是「没有可自主的工作」，而是「可自主这件事还不能只靠现有字段证明」。
 
 `repo-exists` 与 `action-type` 都已在同一 v4 内补齐（§6.1 / §6.2）：前者证明「有一个可达目录」，
-后者把「下一步是仓内可验证的改动」从人读口径变成带证据的事实。剩下的缺口是**结构化列**（方向表的
-「动作类型」与「纯路径」两列）与 `autonomousRepos` 覆盖。`acceptMode` 仍是 `observe`，`auto` 仍是 0 ——
-事实到位不等于许可到位。
+后者把「下一步是仓内可验证的改动」从人读口径变成带证据的事实，并且已经能直接读结构化列。剩下的缺口是
+**列本身的数据**（方向表「动作类型」78 行尚未回填，本轮 `source-column=0`；「纯路径」列还未建）与
+`autonomousRepos` 覆盖。`acceptMode` 仍是 `observe`，`auto` 仍是 0 —— 事实到位不等于许可到位。
 
 ## 8. 验证
 
 ```
 pnpm typecheck                      clean
-pnpm test                           15 files / 167 tests passed
+pnpm test                           15 files / 186 tests passed
 pnpm build                          ok
 node scripts/release-check.mjs      RESULT: PASS（8/8 必需文件、无禁入内容、解包 CLI 自检、版本一致）
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl --json
@@ -425,7 +447,8 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
                                     1 relative / 1 file / 1 not-cloned）·
                                     action:counts 78 rows（unclear 19 / secret 12 / decision 11 /
                                     field-ops 10 / release 10 / repo-code 9 / repo-doc 3 / repo-test 2 /
-                                    config 2）· summary:counts ok · RESULT: PASS
+                                    config 2；source-column 0 / source-text 78）·
+                                    summary:counts ok · RESULT: PASS
 ```
 
 新增/调整的断言：
@@ -446,14 +469,21 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
 - `tests/action-facts.spec.ts`（新，28 例）：每个 kind 各有真实行样本；`用户批注` 里的「代码」不能准入，
   `简要描述` 也不能；「代码已就位，等用户拍板」判 `decision`；否定句（"不用密钥"）不判 secret；
   英文模板句与空格子判 `unclear` 且 `reason` 指明缺什么；`alternatives` 按最严在前；
-  `latest` 里的 `test` 不算测试（ASCII 词边界）。
+  `latest` 里的 `test` 不算测试（ASCII 词边界）。后续新增 8 例覆盖结构化列（共 36 例）：列值优先于「发版」句、
+  大小写/空白容错、空列退回词表（`source=text` 且 `reason` 写明）、非法值判 `unclear` 且不退回词表、
+  列缺失时 `reason` 与 d02b152 逐字一致。
+- `tests/bitable.spec.ts`：方向表有「动作类型」列时读进 `actionType`；列不存在或单元格为空 ⇒ `undefined`
+  （不是 `''`，否则与打错字无法区分）。`tests/mapping.spec.ts`：列值进 `itemActionFact()`、指纹因此变化。
+- `tests/policy.spec.ts`（新增动作层 2 例）：列值写的 `repo-code` 即使 `matched` 为空也放行（否则结构化列
+  只是装饰）；声称来自列却没有 `field`/`evidence` 的事实仍判 `action-unclear`。- `tests/decision-log.spec.ts`：决策行带 `actionSource`（`column` / `text`），日志能回答「写死的还是推出来的」。
 - `tests/policy.spec.ts`（新增动作层 6 例）：code/test/doc 三种仓内动作放行；`action=secret` ⇒
   `action-needs-secret`；每种非仓内 kind 各有独立理由；缺 `actionFacts` ⇒ `action-facts-unknown`；
   `kind=repo-code` 但 `matched` 为空 ⇒ `action-unclear`（事实自相矛盾不得放行）；动作层排在仓库层之后、
   ticket 层之前。
-- `tests/policy-triage-check.spec.ts`（16 例，原 13 例保持）：新增 3 例——每行动作类型由 Gate 自己的模块重算且
-  与文档一致；文档块与 dump 不符 ⇒ `FAIL action:counts`；有 dump 却缺块 ⇒ `FAIL action:counts`。repo 段缺失时跳过（原 9 例保持）；新增 4 例——行行重算通过、
-  文档声称存在而探测不存在 ⇒ `repo:table` 失败、有表无块 ⇒ `repo:counts` 失败、tally 与 dump 不符 ⇒ `repo:tally` 失败。
+- `tests/policy-triage-check.spec.ts`（18 例，原 16 例保持）：新增 2 例——有「动作类型」列时按列值计数
+  （`source-column=1` / `source-text=1`）；文档仍按词表写数时报 `kind-field-ops: doc (absent), derived 1`
+  与 `unexpected keys: kind-repo-test`。原有 16 例的 `triage-action` 夹具补上两行来源计数（无列 ⇒
+  `source-column=0` / `source-text=2`）。
 
 ## 9. 残余风险
 

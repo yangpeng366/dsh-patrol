@@ -24,6 +24,8 @@ export interface DecisionLogEntry {
   roundId: string
   verdict: DecisionRecord['verdict']
   reason: string
+  /** `column` / `text`: written in `动作类型`, or inferred from prose. Absent on old lines. */
+  actionSource?: DecisionRecord['actionSource']
   threadKey: string
   /** Present when the verdict was an accept held back for review (`observe` / `off`). */
   wouldAccept?: { title: string; scope: string; rules: string[] }
@@ -72,6 +74,7 @@ export function toDecisionLogEntry(decision: DecisionRecord, ts: Date): Decision
     triggerId: decision.triggerId,
     evalId: decision.evalId,
   }
+  if (decision.actionSource) entry.actionSource = decision.actionSource
   if (decision.wouldAccept) entry.wouldAccept = decision.wouldAccept
   if (decision.ticketId) entry.ticketId = decision.ticketId
   return entry

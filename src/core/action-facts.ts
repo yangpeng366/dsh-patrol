@@ -7,11 +7,23 @@
  * change, or a human decision. Sending those to an Assessment burns budget and can cross an
  * authorization boundary the row never granted.
  *
- * This module reads the row's *existing* cells (`下一步` / `简要描述` / `用户批注` / `授权边界` /
- * `贡献类型` / `审批状态`) and names one action kind, with the words that matched and the original
- * sentence fragment as evidence. It is pure: no IO, no filesystem, no model.
+ * There are two ways to answer, and this module keeps them apart:
  *
- * Fail-closed is the whole point, so the rules are deliberately asymmetric:
+ *   1. the table's structured `动作类型` column, when the row has one. The value is the fact — this
+ *      module trims it, ignores case, checks it against the kind set and takes it as `kind`, with
+ *      `source: 'column'`. It wins over the word list even when the prose says something else.
+ *   2. otherwise the row's *existing* cells (`下一步` / `简要描述` / `用户批注` / `授权边界` /
+ *      `贡献类型` / `审批状态`), read with a word list, `source: 'text'`.
+ *
+ * The first path exists because the word list is a reading of prose, and prose can say "这步要发版"
+ * in a way no list catches. The second path is what runs before the column is filled, and it is the
+ * prefill tool for it. When a column value is present but not a kind at all (`auto`, `待定`), the
+ * row is `unclear` and the reason names the bad value: an unreadable cell must not be silently
+ * re-read as repo work, and reading it as "no column" would hide the typo.
+ *
+ * The module is pure: no IO, no filesystem, no model.
+ *
+ * Fail-closed is the whole point, so the text rules are deliberately asymmetric:
  *   - **Admission needs the action fields.** `repo-code` / `repo-test` / `repo-doc` are only read
  *     from `下一步` and `简要描述`. A mention of "代码" in `用户批注` (a history log) can never
  *     admit a row.
@@ -28,20 +40,37 @@
  * only place the list is executed.
  */
 
+/**
+ * Every kind a row's action can have, spelled exactly as the structured `动作类型` column spells it.
+ * The list is the allowed set: a column value outside it is not a kind, whatever it looks like.
+ */
+export const ACTION_KINDS = [
+  'repo-code',
+  'repo-test',
+  'repo-doc',
+  'field-ops',
+  'release',
+  'secret',
+  'config',
+  'decision',
+  'unclear',
+] as const
+
 /** What kind of work the row's action line asks for. */
-export type ActionKind =
-  | 'repo-code'
-  | 'repo-test'
-  | 'repo-doc'
-  | 'field-ops'
-  | 'release'
-  | 'secret'
-  | 'config'
-  | 'decision'
-  | 'unclear'
+export type ActionKind = (typeof ACTION_KINDS)[number]
+
+/**
+ * Where `kind` came from.
+ *
+ * `column` means the direction table's `动作类型` cell said it: a person wrote it down, and the word
+ * list does not get a vote. `text` means this module inferred it from prose — the column is absent,
+ * blank, or unreadable, and the reason says which. The decision log carries this marker per row, so
+ * "was this written or guessed" is answerable from the log.
+ */
+export type ActionSource = 'column' | 'text'
 
 /** The row cell an evidence fragment came from, spelled as the table spells it. */
-export type ActionField = '下一步' | '简要描述' | '用户批注' | '授权边界' | '贡献类型' | '审批状态'
+export type ActionField = '动作类型' | '下一步' | '简要描述' | '用户批注' | '授权边界' | '贡献类型' | '审批状态'
 
 /** The refusal code the Gate reports for a non-repo action. */
 export type ActionRefusal =
@@ -57,6 +86,11 @@ export type ActionRefusal =
  * omitted field is "no evidence", which is the fail-closed direction for admission.
  */
 export interface ActionInput {
+  /**
+   * `动作类型` — the structured column, when the table has one. A valid value *is* the fact; an
+   * empty cell or a missing column means "no structured answer", never "no action".
+   */
+  actionType?: string
   /** `下一步` — the row's own action line. The primary evidence. */
   nextStep?: string
   /** `简要描述` — what the row is about. Secondary evidence. */
@@ -86,11 +120,13 @@ export interface ActionMatch {
 /** The fact the Gate reads. */
 export interface ActionFacts {
   kind: ActionKind
+  /** Whether `kind` was written in the `动作类型` column or inferred from prose. */
+  source: ActionSource
   /** Matched terms for `kind`; empty when `kind` is `unclear`. */
   matched: string[]
   /** Original fragment for `kind`, at most 80 characters; `''` when `unclear`. */
   evidence: string
-  /** Field the evidence came from; `''` when `unclear`. */
+  /** Field the evidence came from (`动作类型` for a column value); `''` when `unclear` from text. */
   field: ActionField | ''
   /** Human-readable: why this kind won, or exactly which evidence is missing. */
   reason: string
@@ -113,6 +149,8 @@ export interface ActionFacts {
  * `贡献类型` never classifies on its own; it only breaks a tie between repo kinds.
  */
 const FIELD_ROLES: Readonly<Record<ActionField, { kinds: 'all' | 'decision' | 'none'; decisive: boolean; refusal: boolean }>> = {
+  // The structured column is never scanned for words: its value is read as a whole, above.
+  动作类型: { kinds: 'none', decisive: false, refusal: false },
   下一步: { kinds: 'all', decisive: true, refusal: true },
   简要描述: { kinds: 'all', decisive: false, refusal: false },
   用户批注: { kinds: 'decision', decisive: false, refusal: true },
@@ -280,12 +318,15 @@ interface Hit {
 }
 
 /**
- * Reads the row's cells and names one action kind.
+ * Reads the row's cells and names one action kind from prose alone.
  *
  * Every branch either names a kind with evidence, or returns `unclear` with the reason the row's
  * action line could not be read — the one thing it never does is default to `repo-code`.
+ *
+ * The `动作类型` column is deliberately not an input here: `inspectAction()` reads it before this
+ * runs, so the word list can never overrule a written-down value.
  */
-export function inspectAction(input: ActionInput): ActionFacts {
+function inspectCells(input: ActionInput): Omit<ActionFacts, 'source'> {
   const fields = FIELD_VALUES.map(({ field, read }) => ({ field, text: flatten(read(input)) }))
   const hits: Hit[] = []
 
@@ -363,6 +404,87 @@ export function inspectAction(input: ActionInput): ActionFacts {
     reason: winner.kind.startsWith('repo-')
       ? `「${winner.field}」里是仓内可做的动作（命中 ${winner.matched.join('、')}）`
       : `「${winner.field}」里的动作不在仓内（命中 ${winner.matched.join('、')}），按最严优先级判为 ${winner.kind}${alternatives.length > 0 ? '；同时命中 ' + alternatives.map((entry) => entry.kind).join('、') : ''}`,
+    alternatives,
+  }
+}
+
+/**
+ * The structured column's value as a kind, or `undefined` when it is not one.
+ *
+ * Case and surrounding whitespace are tolerated (`Repo-Code` is `repo-code`), because the cell is
+ * typed by a person. Anything else is not guessed at: `auto`, `待定`, `repo code` and a typo all
+ * come back `undefined`, and `inspectAction()` turns that into `unclear` rather than into prose.
+ */
+export function readActionColumn(value: string | undefined): ActionKind | undefined {
+  const raw = (value ?? '').trim().toLowerCase()
+  if (raw === '') return undefined
+  return (ACTION_KINDS as readonly string[]).includes(raw) ? (raw as ActionKind) : undefined
+}
+
+/**
+ * The fact the Gate reads: the structured column when the row has a usable one, prose otherwise.
+ *
+ * Three cases, and the reason says which one happened:
+ *   - a valid `动作类型` → that kind, `source: 'column'`. It wins even when `下一步` reads like
+ *     something else; the word-list verdict is kept in `alternatives` so the disagreement is
+ *     auditable, not invisible.
+ *   - a blank cell, or no column at all → the word list, `source: 'text'`. This is the pre-column
+ *     behaviour, unchanged, and it is what fills the column in the first place.
+ *   - a value that is not a kind → `unclear`, `source: 'column'`. Deliberately *not* a fallback:
+ *     a typo must stop the row, not hand it to a word list that may call it `repo-code`.
+ */
+export function inspectAction(input: ActionInput): ActionFacts {
+  const lexical = inspectCells(input)
+  const raw = (input.actionType ?? '').trim()
+
+  if (raw === '') {
+    if (input.actionType === undefined) return { ...lexical, source: 'text' }
+    return { ...lexical, source: 'text', reason: `「动作类型」列值为空，已退回词表推断；${lexical.reason}` }
+  }
+
+  const columnKind = readActionColumn(raw)
+  const evidence = evidenceAt(raw, 0, raw.length)
+  const lexicalMatch = lexical.kind === 'unclear' ? undefined : toMatch({
+    kind: lexical.kind,
+    field: lexical.field as ActionField,
+    matched: lexical.matched,
+    evidence: lexical.evidence,
+    decisive: lexical.field !== '' && FIELD_ROLES[lexical.field as ActionField].decisive,
+    refusal: true,
+    order: 0,
+  })
+  const alternatives = [
+    ...(lexicalMatch && lexicalMatch.kind !== columnKind ? [lexicalMatch] : []),
+    ...lexical.alternatives,
+  ]
+
+  if (columnKind === undefined) {
+    return {
+      kind: 'unclear',
+      source: 'column',
+      matched: [],
+      evidence,
+      field: '动作类型',
+      reason: `「动作类型」列值「${evidence}」不在允许集合内（${ACTION_KINDS.join(' / ')}），按 unclear 处理并拒绝，未退回词表推断`,
+      alternatives,
+    }
+  }
+
+  const agreement = lexical.kind === columnKind
+    ? '，与词表推断一致'
+    : lexical.kind === 'unclear'
+      ? '，词表无命中，以列值为准'
+      : `，优先于词表推断（词表判为 ${lexical.kind}）`
+
+  return {
+    kind: columnKind,
+    source: 'column',
+    // No word matched: the cell is one token from a closed set. `policy.refuseAction()` reads
+    // `source` so a column-written repo kind is not refused for having no matched words.
+    matched: [],
+    evidence,
+    field: '动作类型',
+    reason: `「动作类型」列写死为 ${columnKind}（结构化列）${agreement}`,
     alternatives,
   }
 }

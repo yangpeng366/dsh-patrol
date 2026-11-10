@@ -244,13 +244,19 @@ export class DirectionPolicy implements Policy {
    * refused as `action-unclear`: a hand-built fact must not pass through its own label, the same
    * rule `refuseUnprovenRepo()` applies to `reason: 'repo-exists-ok'`.
    *
+   * The one exception is a fact from the structured `动作类型` column: it has no word list by design,
+   * so its evidence is the cell itself (`source: 'column'` + `field: '动作类型'` + the value). Without
+   * that exception a row someone wrote down as `repo-code` would be refused for not matching a word
+   * it was never read for — the column would be decoration.
+   *
    * A missing fact is refused too. The mapping fills it on every row, so its absence means the
    * caller assembled the facts by hand and skipped the classifier — not that the work is in-repo.
    */
   private refuseAction(facts: DirectionFacts): string | undefined {
     const fact = facts.actionFacts
     if (!fact) return 'action-facts-unknown'
-    if (isRepoWork(fact.kind) && fact.matched.length === 0) return 'action-unclear'
+    const fromColumn = fact.source === 'column' && fact.field === '动作类型' && fact.evidence !== ''
+    if (isRepoWork(fact.kind) && fact.matched.length === 0 && !fromColumn) return 'action-unclear'
     return actionRefusal(fact.kind)
   }
 

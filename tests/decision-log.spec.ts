@@ -38,7 +38,7 @@ function trigger(id: string): Trigger {
       nextStep: '把下一步做完',
       repoPath: 'D:\\gitAll\\demo',
       stage: '开发',
-      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] }, actionFacts: { kind: 'repo-code', matched: ['实现'], evidence: '把下一步做完', field: '下一步', reason: '仓内动作', alternatives: [] } },
+      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] }, actionFacts: { kind: 'repo-code', source: 'text', matched: ['实现'], evidence: '把下一步做完', field: '下一步', reason: '仓内动作', alternatives: [] } },
     },
   }
 }
@@ -152,5 +152,22 @@ describe('Engine + DecisionLog', () => {
     for (const record of records) expect(record['roundId']).toBe(summary.roundId)
     expect(records.every((record) => record['verdict'] === 'observed')).toBe(true)
     expect(records[0]!['wouldAccept']).toMatchObject({ title: '示例方向' })
+    // "Written down or inferred" travels with the decision, so a log reader can tell a column fact
+    // from a reading of prose without going back to the table.
+    expect(records[0]!['actionSource']).toBe('text')
+  })
+
+  it('marks a decision whose action kind came from the 动作类型 column', async () => {
+    const config = Config.parse({ allowAnyRepo: true, decisionLogPath: join(tempDir(), 'decisions.jsonl'), acceptMode: 'observe' })
+    const log = createDecisionLog(config)!
+    const engine = createEngine(config, { decisionLog: log })
+    const fromColumn = trigger('trg3')
+    const facts = fromColumn.meta['facts'] as Record<string, unknown>
+    facts['actionFacts'] = { kind: 'repo-code', source: 'column', matched: [], evidence: 'repo-code', field: '动作类型', reason: '列值', alternatives: [] }
+    engine.receive(fromColumn)
+
+    await engine.runRound(new Date('2026-11-10T01:00:00.000Z'))
+    const records = lines(log.path).map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(records[0]!['actionSource']).toBe('column')
   })
 })

@@ -38,8 +38,7 @@ describe('BitableSource', () => {
     expect(items[1]).toMatchObject({ id: 'rec2', priority: 'P2', collaboration: 'approve', approval: '待审' })
   })
 
-  it('takes the row id from record_id_list, not from a column', async () => {
-    const source = new BitableSource({
+  it('takes the row id from record_id_list, not from a column', async () => {    const source = new BitableSource({
       baseToken: 'base',
       tableId: 'table',
       exec: async () => ({ stdout: JSON.stringify(payload) }),
@@ -96,5 +95,27 @@ describe('BitableSource', () => {
     expect(calls[0]!.args).toContain('--as')
     expect(calls[0]!.args).toContain('bot')
     expect(calls[0]!.args).toContain('table')
+  })
+
+  // The structured column is optional: the table may not have it yet, and that must read as "no
+  // structured answer" instead of as an error or as an empty string the classifier could misread.
+  it('reads the 动作类型 column when the table has one, and leaves it undefined when it does not', async () => {
+    const withColumn = {
+      ok: true,
+      data: {
+        fields: ['项目名', '动作类型'],
+        record_id_list: ['rec1', 'rec2'],
+        has_more: false,
+        data: [['有值', [' repo-test ']], ['空格', ['']]],
+      },
+    }
+    const source = new BitableSource({ baseToken: 'base', tableId: 'table', exec: async () => ({ stdout: JSON.stringify(withColumn) }) })
+    const items = await source.listItems()
+    expect(items[0]!.actionType).toBe('repo-test')
+    expect(items[1]!.actionType).toBeUndefined()
+
+    const withoutColumn = new BitableSource({ baseToken: 'base', tableId: 'table', exec: async () => ({ stdout: JSON.stringify(payload) }) })
+    const legacy = await withoutColumn.listItems()
+    expect(legacy.every((item) => item.actionType === undefined)).toBe(true)
   })
 })

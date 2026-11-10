@@ -42,6 +42,14 @@ export interface DirectionItem {
   userNote: string
   /** `贡献类型` — the source's own tag for the contribution, e.g. `功能增强` / `测试补充`. */
   contribution: string
+  /**
+   * `动作类型` — the source's structured action kind, when the table has that column.
+   *
+   * `undefined` means "no structured answer": either the column does not exist yet, or the cell is
+   * blank. A source must not invent a value here, and a row with a value is not re-read from prose:
+   * the column wins (`src/core/action-facts.ts`).
+   */
+  actionType?: string
   /** The action waiting for a human decision, if any. */
   pendingAction: string
   /** Free-form category, e.g. `工作项目` / `兴趣研究`. */
@@ -85,6 +93,9 @@ export function normalizeItem(raw: Record<string, unknown>): DirectionItem {
     approval: str(raw['approval']) || '已通过',
     userNote: str(raw['userNote']),
     contribution: str(raw['contribution']),
+    // Blank and missing are the same thing: no structured answer. Keeping `''` would make a row
+    // indistinguishable from a typo, and the classifier reads `undefined` as "column absent".
+    actionType: str(raw['actionType']).trim() === '' ? undefined : str(raw['actionType']).trim(),
     pendingAction: str(raw['pendingAction']),
     category: str(raw['category']),
   }

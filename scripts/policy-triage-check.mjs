@@ -24,8 +24,9 @@
  *      "恢复后 auto 候选"; the point of the check is that "real local repo" is a fact now, not a
  *      reading of the cell.
  *   6. action type: every row of the dump is classified with the Gate's own `inspectAction()`, and
- *      the `triage-action` block equals the per-kind counts. §6.2 publishes those counts; the check
- *      is what keeps them from becoming prose again.
+ *      the `triage-action` block equals the per-kind counts plus the two source counts
+ *      (`source-column` / `source-text`: written in `动作类型` vs inferred from prose). §6.2 publishes
+ *      those counts; the check is what keeps them from becoming prose again.
  *
  *   node scripts/policy-triage-check.mjs
  *   node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md \
@@ -196,6 +197,9 @@ export function tableFacts(text) {
       description: cell(row['简要描述']),
       userNote: cell(row['用户批注']),
       contribution: cell(row['贡献类型']),
+      // The structured column, when the dump has it. A missing column and a blank cell both come
+      // back `''`, which `inspectAction()` reads as "no structured answer" and falls back from.
+      actionType: cell(row['动作类型']),
       repoPath: cell(row['仓库路径']),
       // The untouched cell, for `inspectRepoPath()`: it does its own array/blank/annotation
       // handling, and a cell flattened by `cell()` would lose the shape the Gate sees.
@@ -413,8 +417,10 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
     const actionBlock = parseKeyValueBlock(markdown, 'triage-action')
     const actionDerived = { records: 0 }
     const byKind = {}
+    const bySource = { column: 0, text: 0 }
     for (const rowFacts of facts.values()) {
       const fact = inspectAction({
+        actionType: rowFacts.actionType,
         nextStep: rowFacts.nextStep,
         description: rowFacts.description,
         userNote: rowFacts.userNote,
@@ -424,9 +430,14 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
       })
       actionDerived.records += 1
       byKind[fact.kind] = (byKind[fact.kind] ?? 0) + 1
+      bySource[fact.source] += 1
       const key = `kind-${fact.kind}`
       actionDerived[key] = (actionDerived[key] ?? 0) + 1
     }
+    // Two counts, published separately: how many rows the table already answers (`动作类型` written)
+    // and how many this module still infers. A missing key is a mismatch, not a zero by default.
+    actionDerived['source-column'] = bySource.column
+    actionDerived['source-text'] = bySource.text
     const expectedAction = actionBlock ?? {}
     const wrongAction = Object.entries(actionDerived)
       .filter(([key, value]) => expectedAction[key] !== value)
@@ -438,9 +449,9 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
       actionBlock === null
         ? 'no ```triage-action block'
         : [wrongAction.join(' · '), extraAction.length > 0 ? `unexpected keys: ${extraAction.join(', ')}` : ''].filter(Boolean).join(' · ')
-          || `${actionDerived.records} records · ${Object.entries(byKind).map(([kind, count]) => `${kind} ${count}`).join(' · ')}`,
+          || `${actionDerived.records} records · ${Object.entries(byKind).map(([kind, count]) => `${kind} ${count}`).join(' · ')} · source-column ${bySource.column} · source-text ${bySource.text}`,
     )
-    report.action = { counts: byKind }
+    report.action = { counts: byKind, sources: bySource }
   } else {
     record('table:structure', true, 'skipped: no --table dump, so only coverage, vocabulary and the counts were checked')
     record('repo:table', true, 'skipped: no --table dump, so repo-exists was not recomputed')
@@ -559,6 +570,7 @@ function main(argv) {
     }
     if (report.action) {
       lines.push('', `  action type (recomputed from the dump): ${Object.entries(report.action.counts).map(([kind, count]) => `${kind} ${count}`).join(' · ')}`)
+      lines.push(`  action source: column ${report.action.sources.column} · text ${report.action.sources.text}`)
     }
     if (tableText === null && options.table === '') lines.push('  note: pass --table <dump.ndjson> to re-check the structured verdicts')
     lines.push('', report.ok ? 'RESULT: PASS' : 'RESULT: FAIL')

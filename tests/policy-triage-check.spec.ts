@@ -55,8 +55,11 @@ function doc(options: { rows?: string[]; summary?: string; repo?: string[]; acti
     'total=2', 'auto=0', 'approval=1', 'read-only=0', 'excluded=1',
     'replay-v1-schedule-stopped=1', 'replay-v1-would-accept=1',
   ].join('\n')
-  // The fixture rows are `补一个单测` (repo-test) and `发布新版本` (release).
-  const action = options.action === undefined ? ['records=2', 'kind-repo-test=1', 'kind-release=1'] : options.action
+  // The fixture rows are `补一个单测` (repo-test) and `发布新版本` (release). Neither dump row has a
+  // `动作类型` cell, so both are inferred: the two source counts say so instead of leaving it implicit.
+  const action = options.action === undefined
+    ? ['records=2', 'kind-repo-test=1', 'kind-release=1', 'source-column=0', 'source-text=2']
+    : options.action
   return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ...(options.repo ?? []), ...(action === null ? [] : ['', '```triage-action', ...action, '```'])].join('\n')
 }
 
@@ -204,6 +207,37 @@ describe('policy-triage-check', () => {
     // `补一个单测` is repo-test, `发布新版本` is release — the point is that it is measured, not read.
     expect(result.stdout).toContain('repo-test 1')
     expect(result.stdout).toContain('release 1')
+    // No `动作类型` column in this dump: every kind is inferred, and the report says so.
+    expect(result.stdout).toContain('source-column 0')
+    expect(result.stdout).toContain('source-text 2')
+  })
+
+  // The structured column is the fact. `补一个单测` would be repo-test by the word list, but the row
+  // says 现场, and a written-down value is not re-read from prose.
+  it('takes the 动作类型 cell over the word list and counts it as column-sourced', () => {
+    const table = [
+      { record_id: 'recRun', 项目名: '在跑的行', '巡检间隔(分钟)': [60], 授权边界: ['自主'], 审批状态: [], 下一步: '补一个单测', 仓库路径: 'D:\\gitAll\\run', 动作类型: ['field-ops'] },
+      { record_id: 'recStop', 项目名: '停跑的行', '巡检间隔(分钟)': [0], 授权边界: ['自主'], 审批状态: [], 下一步: '发布新版本', 仓库路径: 'D:\\gitAll\\stop' },
+    ].map((row) => JSON.stringify(row)).join('\n')
+    const markdown = doc({ action: ['records=2', 'kind-field-ops=1', 'kind-release=1', 'source-column=1', 'source-text=1'] })
+    const result = run({ markdown, table })
+    expect(result.stdout).toContain('ok   action:counts')
+    expect(result.stdout).toContain('field-ops 1')
+    expect(result.stdout).toContain('source-column 1')
+  })
+
+  it('fails when a written-down kind is not the one the doc publishes', () => {
+    const table = [
+      { record_id: 'recRun', 项目名: '在跑的行', '巡检间隔(分钟)': [60], 授权边界: ['自主'], 审批状态: [], 下一步: '补一个单测', 仓库路径: 'D:\\gitAll\\run', 动作类型: ['field-ops'] },
+      { record_id: 'recStop', 项目名: '停跑的行', '巡检间隔(分钟)': [0], 授权边界: ['自主'], 审批状态: [], 下一步: '发布新版本', 仓库路径: 'D:\\gitAll\\stop' },
+    ].map((row) => JSON.stringify(row)).join('\n')
+    // The doc still says what the word list would have said.
+    const result = run({ table })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL action:counts')
+    // The doc's repo-test count is now an extra key: nothing in the dump produces that kind.
+    expect(result.stdout).toContain('unexpected keys: kind-repo-test')
+    expect(result.stdout).toContain('kind-field-ops: doc (absent), derived 1')
   })
 
   it('fails when the action block disagrees with the dump', () => {

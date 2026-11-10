@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { itemFacts, itemFingerprint, itemIsDue, itemRepoFact, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
+import { itemActionFact, itemFacts, itemFingerprint, itemIsDue, itemRepoFact, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
 import { normalizeItem, type DirectionItem } from '../src/source/provider.ts'
 
 const base: DirectionItem = normalizeItem({
@@ -30,6 +30,15 @@ describe('mapping', () => {
     expect(itemThreadKey(base)).toBe('patrol:rec1')
   })
 
+  // The column is state, like the repo probe: writing or correcting it must produce a new Trigger
+  // (otherwise the row keeps the verdict it was refused under). Missing and blank hash the same, so
+  // a table without the column still produces the pre-column ids.
+  it('changes the fingerprint when the structured action kind is written or corrected', () => {
+    expect(itemFingerprint(base)).toBe(itemFingerprint({ ...base, actionType: undefined }))
+    expect(itemFingerprint(base)).not.toBe(itemFingerprint({ ...base, actionType: 'repo-code' }))
+    expect(itemFingerprint({ ...base, actionType: 'repo-code' })).not.toBe(itemFingerprint({ ...base, actionType: 'release' }))
+  })
+
   // Policy v4: the repo cell is a fact, and it is probed — not inferred from the path's shape.
   it('carries the probed repo cell into the facts', () => {
     const probed = itemToTrigger({ ...base, repoPath: 'D:\\gitAll\\dsh-patrol' }, '2026-11-10T01:00:00.000Z', {
@@ -58,6 +67,25 @@ describe('mapping', () => {
   it('defaults an unreadable next step to unclear, never to repo-code', () => {
     const row = { ...base, nextStep: 'Review the saved Codex output' }
     expect(itemFacts(row).actionFacts).toMatchObject({ kind: 'unclear' })
+  })
+
+  // The structured column, when the table has one, is the fact: even a 发版 sentence does not
+  // re-classify the row, and the fact says where it came from.
+  it('takes the 动作类型 column over the word list and marks the source', () => {
+    const row = { ...base, nextStep: '构建并发版到 60', actionType: 'repo-code' }
+    expect(itemActionFact(row)).toMatchObject({ kind: 'repo-code', source: 'column', field: '动作类型' })
+    expect(itemFacts(row).actionFacts).toMatchObject({ source: 'column' })
+  })
+
+  it('stays a text fact when the row has no column, which is the pre-column behaviour', () => {
+    const row = { ...base, nextStep: '补一个单测' }
+    expect(row.actionType).toBeUndefined()
+    expect(itemActionFact(row)).toMatchObject({ kind: 'repo-test', source: 'text' })
+  })
+
+  it('refuses an unreadable column value with the column named as evidence', () => {
+    const row = { ...base, nextStep: '编译并提交代码', actionType: 'auto' }
+    expect(itemActionFact(row)).toMatchObject({ kind: 'unclear', source: 'column', field: '动作类型', evidence: 'auto' })
   })
 
   it('passes the probe through, so a cell is read against the filesystem the caller names', () => {
@@ -114,5 +142,12 @@ describe('normalizeItem', () => {
     expect(item.approval).toBe('已通过')
     expect(item.intervalMin).toBe(0)
     expect(item.threadId).toBeNull()
+    // No `动作类型` column: "no structured answer", not an empty string a typo could be confused with.
+    expect(item.actionType).toBeUndefined()
+  })
+
+  it('keeps a trimmed 动作类型 value and drops a blank one', () => {
+    expect(normalizeItem({ id: 'rec4', actionType: '  Repo-Test ' }).actionType).toBe('Repo-Test')
+    expect(normalizeItem({ id: 'rec5', actionType: '   ' }).actionType).toBeUndefined()
   })
 })

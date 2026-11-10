@@ -23,6 +23,8 @@ function repoFact(overrides: Partial<RepoExistsFact> = {}): RepoExistsFact {
 function actionFact(overrides: Partial<ActionFacts> = {}): ActionFacts {
   return {
     kind: 'repo-code',
+    // The default fact is the pre-column one: inferred from prose. A column fact says `column`.
+    source: 'text',
     matched: ['实现'],
     evidence: '把下一步做完',
     field: '下一步',
@@ -292,6 +294,20 @@ describe('DirectionPolicy action layer', () => {
 
   it('refuses a repo-kind fact that carries no matched word', () => {
     const result = policy.gate(facts({ actionFacts: actionFact({ matched: [] }) }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('action-unclear')
+  })
+
+  // A column-written kind has no word list by design; refusing it for empty `matched` would make the
+  // structured column decoration. The exemption needs all three marks, not just the label.
+  it('admits a repo kind written in the 动作类型 column, which has no matched words', () => {
+    const fromColumn = actionFact({ source: 'column', field: '动作类型', matched: [], evidence: 'repo-code' })
+    expect(policy.gate(facts({ actionFacts: fromColumn }), thread, []).admissible).toBe(true)
+  })
+
+  it('still refuses a fact that claims to come from the column without carrying its value', () => {
+    const forged = actionFact({ source: 'column', field: '动作类型', matched: [], evidence: '' })
+    const result = policy.gate(facts({ actionFacts: forged }), thread, [])
     expect(result.admissible).toBe(false)
     if (!result.admissible) expect(result.reason).toBe('action-unclear')
   })

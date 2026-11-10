@@ -203,6 +203,81 @@ describe('inspectAction · fail-closed', () => {
   })
 })
 
+describe('inspectAction · the structured 动作类型 column', () => {
+  // The column is the fact: a value someone wrote down is not re-read from prose. `发版` in `下一步`
+  // would be `release` by the word list, and the row is still repo-test because the table says so.
+  it('takes the column value even when 下一步 reads like a release', () => {
+    const fact = inspectAction({ actionType: 'repo-test', nextStep: '构建并发版到 60，再复验脏标签率' })
+    expect(fact.kind).toBe('repo-test')
+    expect(fact.source).toBe('column')
+    expect(fact.field).toBe('动作类型')
+    expect(fact.evidence).toBe('repo-test')
+    expect(fact.reason).toContain('结构化列')
+    expect(fact.reason).toContain('词表判为 release')
+    // The disagreement stays auditable instead of disappearing.
+    expect(fact.alternatives.map((entry) => entry.kind)).toContain('release')
+    expect(actionRefusal(fact.kind)).toBeUndefined()
+  })
+
+  it('tolerates case and surrounding whitespace in the cell', () => {
+    const fact = inspectAction({ actionType: '  Repo-Code\u00a0', nextStep: '补一个单测' })
+    expect(fact.kind).toBe('repo-code')
+    expect(fact.source).toBe('column')
+  })
+
+  it('reads a column-sourced non-repo kind as that refusal, not as repo work', () => {
+    const fact = inspectAction({ actionType: 'secret', nextStep: '编译并提交代码' })
+    expect(fact.kind).toBe('secret')
+    expect(fact.source).toBe('column')
+    expect(actionRefusal(fact.kind)).toBe('action-needs-secret')
+  })
+
+  it('falls back to the word list when the cell is blank, and says so', () => {
+    const fact = inspectAction({ actionType: '   ', nextStep: '补一个单测' })
+    expect(fact.kind).toBe('repo-test')
+    expect(fact.source).toBe('text')
+    expect(fact.reason).toContain('列值为空')
+    expect(fact.reason).toContain('已退回词表推断')
+  })
+
+  it('treats a missing column exactly like a blank one, without touching the pre-column reason', () => {
+    const absent = inspectAction({ nextStep: '补一个单测' })
+    expect(absent.source).toBe('text')
+    expect(absent.kind).toBe('repo-test')
+    // No column at all: the reason is the pre-column sentence, byte for byte.
+    expect(absent.reason).toBe(inspectAction({ nextStep: '补一个单测', actionType: undefined }).reason)
+    expect(absent.reason).not.toContain('退回词表')
+  })
+
+  // Fail-closed: an unreadable cell is not "no answer". Falling back to prose could turn the typo
+  // into repo-code, which is the one silent pass this module exists to prevent.
+  it('refuses an unreadable column value as unclear instead of guessing repo work', () => {
+    for (const value of ['auto', 'Repo Code', '待定', 'repo_code', 'repo-code!']) {
+      const fact = inspectAction({ actionType: value, nextStep: '编译并提交代码' })
+      expect(fact.kind).toBe('unclear')
+      expect(fact.source).toBe('column')
+      expect(fact.reason).toContain('不在允许集合内')
+      expect(actionRefusal(fact.kind)).toBe('action-unclear')
+      // What the row would have been read as is still visible, but it is not the verdict.
+      expect(fact.alternatives.map((entry) => entry.kind)).toContain('repo-code')
+    }
+  })
+
+  it('honours a written-down unclear without falling back to the word list', () => {
+    const fact = inspectAction({ actionType: 'unclear', nextStep: '编译并提交代码' })
+    expect(fact.kind).toBe('unclear')
+    expect(fact.source).toBe('column')
+    expect(fact.field).toBe('动作类型')
+    expect(fact.alternatives.map((entry) => entry.kind)).toContain('repo-code')
+  })
+
+  it('keeps evidence at most 80 characters for a long column value', () => {
+    const fact = inspectAction({ actionType: `${'x'.repeat(200)}` })
+    expect(fact.evidence.length).toBeLessThanOrEqual(MAX_EVIDENCE)
+    expect(fact.kind).toBe('unclear')
+  })
+})
+
 describe('inspectAction · evidence and tie-breaks', () => {
   it('keeps the evidence under 80 characters and points at the window around the match', () => {
     const long = `${'前置说明文字。'.repeat(20)}现场执行升级脚本${'后续说明文字。'.repeat(20)}`

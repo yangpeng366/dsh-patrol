@@ -58,6 +58,8 @@ const COLUMNS = {
   approval: '审批状态',
   userNote: '用户批注',
   contribution: '贡献类型',
+  /** Structured action kind. Optional: a table without the column reads as "no structured answer". */
+  actionType: '动作类型',
   pendingAction: '待审行动',
   category: '分类',
   lastRun: '最近执行时间',

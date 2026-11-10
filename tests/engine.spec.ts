@@ -4,7 +4,7 @@ import { DirectionPolicy } from '../src/core/policy.ts'
 import type { Assignment, Ticket, Trigger } from '../src/core/model.ts'
 
 /** Repo work, as `itemActionFact()` reads it; a row without one is refused as `action-facts-unknown`. */
-const repoWork = { kind: 'repo-code', matched: ['实现'], evidence: '把下一步做完', field: '下一步', reason: '仓内动作', alternatives: [] }
+const repoWork = { kind: 'repo-code', source: 'text', matched: ['实现'], evidence: '把下一步做完', field: '下一步', reason: '仓内动作', alternatives: [] }
 
 function trigger(id: string, overrides: Record<string, unknown> = {}): Trigger {
   return {

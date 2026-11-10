@@ -6,6 +6,7 @@
  * only ever sees bounded facts through the Assessor.
  */
 import type { AcceptMode, Assessor, Candidate } from './eval.ts'
+import type { ActionSource } from './action-facts.ts'
 import type { Assignment, Mandate, Strength, Thread, Ticket, TicketEndBy, Trigger, TriggerDisposition } from './model.ts'
 import type { Policy } from './policy.ts'
 import { itemScope } from '../mapping.ts'
@@ -25,6 +26,11 @@ export interface DecisionRecord {
   triggerId: string
   verdict: 'ignored' | 'unavailable' | 'admitted' | 'observed'
   reason: string
+  /**
+   * Where the action verdict came from: the `动作类型` column or the word list. Present whenever the
+   * Trigger carries an action fact, so the log answers "written down or inferred" per row.
+   */
+  actionSource?: ActionSource
   /** Present when the verdict was an accept that was held back for review. */
   wouldAccept?: { title: string; scope: string; rules: string[] }
   ticketId?: string
@@ -212,7 +218,13 @@ export class Engine {
     else if (verdict === 'observed') summary.observed += 1
     else if (verdict === 'unavailable') summary.unavailable += 1
     else summary.ignored += 1
-    this.onDecision?.({ roundId, evalId, threadKey: trigger.threadKey, triggerId: trigger.id, verdict, reason, ...extra, ticketId })
+    this.onDecision?.({
+      roundId, evalId, threadKey: trigger.threadKey, triggerId: trigger.id, verdict, reason,
+      // The source marker is a property of the row, not of the verdict: a refused and an accepted
+      // row both say whether their kind was written in the table or inferred from prose.
+      actionSource: actionSourceOf(trigger),
+      ...extra, ticketId,
+    })
   }
 
   private openTicket(
@@ -251,6 +263,19 @@ export class Engine {
     void this.sink?.start(ticket, assignment)
     return ticket
   }
+}
+
+/**
+ * The action-kind source a Trigger carries, if any.
+ *
+ * `itemToTrigger()` writes the fact in two places (`meta.facts.actionFacts` for the Gate and
+ * `meta.actionFacts` for readers); a Trigger built by hand in a test may carry only one of them.
+ * Neither present means the caller never classified the row, and the log says nothing.
+ */
+function actionSourceOf(trigger: Trigger): ActionSource | undefined {
+  const facts = trigger.meta['facts'] as { actionFacts?: { source?: ActionSource } } | undefined
+  const direct = trigger.meta['actionFacts'] as { source?: ActionSource } | undefined
+  return facts?.actionFacts?.source ?? direct?.source
 }
 
 /** Scope helper re-exported for callers that only import the Engine. */

@@ -11,6 +11,15 @@
 
 ### Added
 
+- 结构化「动作类型」列：`DirectionItem.actionType`（可选）+ `BitableSource` 读取方向表同名列（列不存在或
+  单元格为空 ⇒ `undefined`，不报错）。`inspectAction()` 先读这一列：合法值就是 `kind`，`source='column'`，
+  词表不再改判（`下一步` 写「发版」也不改）；列缺失/为空才退回词表，`source='text'`，并在 `reason` 里
+  写明「列值为空，已退回词表推断」；列值大小写与首尾空白容错，**非法值判 `unclear`**（不退回词表，
+  否则打错字会被重新读成 `repo-code`）。`ActionFacts.source` 是新的可读标记，决策日志每行带 `actionSource`，
+  `scripts/policy-triage-check.mjs` 的 `action:counts` 分别报 `source-column` / `source-text` 两个数。
+  `itemFingerprint()` 纳入 `actionType`：列值被写入或改正会生成新 Trigger，列缺失时 id 与之前完全一致。
+  `acceptMode` 仍为 `observe`，`auto` 仍为 0；方向表实际回填前，78 行仍是 `source-text`（`source-column=0`）。
+
 - Policy `v4`：新增 `schedule-stopped`。`巡检间隔(分钟)` 作为结构化事实进入 `DirectionFacts`，
   `0`/空（表内约定即停跑，`巡检占用` 列写明 `0=禁用巡检`）在 Gate 第一道行级检查被拒；
   事实缺失同样拒绝（与 v3 的 `repo-allowlist-unset` 同一条理由）。`0` 不再被读成“每轮”。
@@ -47,6 +56,9 @@
 
 ### Changed
 
+- `DirectionPolicy.refuseAction()` 接受来自 `动作类型` 列的仓内 kind：列值没有命中词（`matched` 为空）
+  仍然放行，但要求 `source='column'` 且 `field='动作类型'` 且 `evidence` 非空；声称来自列却不带内容的事实
+  仍是 `action-unclear`。词表推的 `repo-code` 缺 `matched` 依旧被拒。
 - `itemFingerprint()` 纳入 `intervalMin`：停跑→恢复会生成新 Trigger，否则恢复的行永远被判为重复事件。
 - `itemFingerprint()` 纳入仓库存在性（`exists` / `missing`）：仓被克隆回来后重新判定，而不是被当成重复事件。
 - `DirectionPolicy.gate()` 的仓库层变成两步：白名单（`repo-allowlist-unset` / `no-repo-path` /
