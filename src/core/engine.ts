@@ -222,7 +222,11 @@ export class Engine {
     title: string,
     scope: string,
   ): Ticket {
-    const id = `tkt_${createHash('sha1').update(trigger.threadKey).digest('hex').slice(0, 12)}`
+    // `ticketStore` keeps ended Tickets, so a row that opens again after its Ticket ended must
+    // not overwrite the record of the previous generation: a second line of work gets `-r2`.
+    const baseId = `tkt_${createHash('sha1').update(trigger.threadKey).digest('hex').slice(0, 12)}`
+    let id = baseId
+    for (let generation = 2; this.ticketStore.has(id); generation += 1) id = `${baseId}-r${generation}`
     const mandate: Mandate = { scope, strength, basis }
     const assignment: Assignment = { id: `asg_${createHash('sha1').update(`${id}:${trigger.id}`).digest('hex').slice(0, 12)}`, ticketId: id, status: 'pending' }
     const repoPath = trigger.meta['repoPath']

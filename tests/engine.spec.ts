@@ -142,4 +142,24 @@ describe('Engine rounds', () => {
     expect(instance.ticket(ticket.id)!.status).toBe('ended')
     expect(instance.ticket(ticket.id)!.outcome).toBe('dropped')
   })
+
+  it('keeps the ended record when the same row opens again', async () => {
+    const { instance, started } = engine()
+    instance.receive(trigger('trg1'))
+    const first = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
+    const firstId = first.tickets[0]!
+    instance.endTicket(firstId, 'person', 'dropped')
+
+    // Same row, next generation: a new Trigger keeps the thread key, and the Ticket id must
+    // move to `-r2` instead of overwriting the ended record in the store.
+    instance.receive(trigger('trg2'))
+    const second = await instance.runRound(new Date('2026-11-10T02:00:00.000Z'))
+    const secondId = second.tickets[0]!
+    expect(secondId).toBe(`${firstId}-r2`)
+    expect(instance.tickets()).toHaveLength(2)
+    expect(instance.ticket(firstId)!.status).toBe('ended')
+    expect(instance.ticket(firstId)!.outcome).toBe('dropped')
+    expect(instance.ticket(secondId)!.status).toBe('running')
+    expect(started).toHaveLength(2)
+  })
 })

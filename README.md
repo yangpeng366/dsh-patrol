@@ -272,6 +272,9 @@ pnpm test -- same-repo                # 同一套场景的 vitest 入口（共�
 `acceptMode`：它证明闸门有效，不构成切 `auto` 的决定。细则见
 [`docs/policy-v3-allowlist.md`](docs/policy-v3-allowlist.md) §7。
 
+同一行结束之后再开时，第二条 Ticket 的 id 追加 `-r2`、`-r3`……；第一条 `ended` 记录留在
+`tickets()` 里，审计能看到几代工作各自的结果，而不是被新记录覆盖。
+
 ## Running on Windows
 
 `lark-cli` installs as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot spawn by bare
@@ -282,11 +285,11 @@ Override with `LARK_CLI=/path/to/lark-cli`.
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 68 tests
+pnpm test        # vitest run — 69 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 68 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 69 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 What the tests actually pin down: the Gate's refusals (needs-approval, read-only, approval state,
 no next step, ticket already open, paused), the v3 repo default (empty allowlist refuses, explicit
