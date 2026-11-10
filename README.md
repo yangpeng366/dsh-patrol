@@ -92,6 +92,21 @@ nothing, so a table of directions can be run in shadow mode first and only then 
 
 
 ## Shadow run against a real table
+## CLI（`patrol`）
+
+skill 的前三步——列行、看一行、回写一轮——不依赖 DSH 宿主，装包后直接可用：
+
+```bash
+patrol rows
+patrol row <record_id>
+patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievement "做了什么，证据是什么"
+```
+
+数据源按 `--source` / `PATROL_SOURCE` 选择：`local-json` 用 `--tasks-file`，`bitable` 用
+`--base-token` / `--table-id`（或 `PATROL_BASE_TOKEN` / `PATROL_TABLE_ID`）。`report` 默认把新结果
+追加到「外部成就」并标时间，`--replace` 才覆盖；`--achievement -` 从标准输入读，适合贴多行证据；
+`--json` 输出机器可读结果。退出码：0 成功，2 参数/配置/行不存在，1 运行期失败。
+
 
 `observe` mode is meant to be run against a live table before anything is allowed to start
 (`scripts/` ships only in a clone: a tarball install has no `scripts/` directory — see

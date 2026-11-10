@@ -32,6 +32,9 @@
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "patrol": "lib/cli.js"
+  },
   "files": [
     "lib",
     "cordis.patch.yml",

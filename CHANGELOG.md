@@ -20,6 +20,9 @@
 - `docs/policy-v3-allowlist.md`：v3 白名单的口径、16 条 would-accept 行的逐条归类、
   前缀比较规则，以及同仓并发演练的细则（`d077529`、`fc36f15`）。
 - `scripts/same-repo-rehearsal.ts`：走 Engine 真实路径（`runRound()` → `Policy.gate()` →
+- `patrol` 命令行（`bin`）：`rows` / `row <id>` / `report <id>` 三个命令，直接使用 `SourceProvider`
+  契约；`report` 默认给「外部成就」追加带时间的结果，`--replace` 才覆盖。`local-json` 源新增可写变体
+  `LocalJsonFileSource`，无飞书账号也能把一轮完整走完。
   `Assessor.assess()` → `openTicket()` → sink）的五个同仓场景演练，全 PASS 退出码 0
   （`fc36f15`）。
 - `scripts/shadow-run.mjs --any-repo`：诊断用的显式 opt-in，脚本自己打印
