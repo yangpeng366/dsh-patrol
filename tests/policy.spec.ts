@@ -32,7 +32,9 @@ function facts(overrides: Record<string, unknown>): Trigger {
 }
 
 describe('DirectionPolicy.gate', () => {
-  const policy = new DirectionPolicy({ version: 'v1' })
+  // The non-repo rules are exercised behind the explicit opt-in, so each test hits its own layer
+  // instead of being masked by the v3 repo default. The repo layer has its own describe below.
+  const policy = new DirectionPolicy({ version: 'v1', allowAnyRepo: true })
 
   it('admits a 自主 row with a next step as explicit work', () => {
     const result = policy.gate(trigger(), thread, [])
@@ -73,7 +75,7 @@ describe('DirectionPolicy.gate', () => {
   })
 
   it('admits nothing while paused', () => {
-    const paused = new DirectionPolicy({ version: 'v1', paused: true })
+    const paused = new DirectionPolicy({ version: 'v1', paused: true, allowAnyRepo: true })
     const result = paused.gate(trigger(), thread, [])
     expect(result.admissible).toBe(false)
     if (!result.admissible) expect(result.reason).toBe('policy-paused')
@@ -96,7 +98,7 @@ describe('DirectionPolicy.revalidate', () => {
 
 describe('DirectionPolicy repo allowlist', () => {
   const policy = new DirectionPolicy({
-    version: 'v2',
+    version: 'v3',
     autonomousRepos: ['D:\\gitAll\\dsh-patrol', 'E:/gitAll/openeyes/'],
   })
 
@@ -129,8 +131,47 @@ describe('DirectionPolicy repo allowlist', () => {
     if (!result.admissible) expect(result.reason).toBe('repo-not-cloned')
   })
 
-  it('keeps every row eligible when no allowlist is configured', () => {
-    const open = new DirectionPolicy({ version: 'v1' })
-    expect(open.gate(facts({ repoPath: '' }), thread, []).admissible).toBe(true)
+  it('runs the repo layer before the ticket layer, so an allowlisted repo still reports ticket-already-open', () => {
+    const open = { id: 'tkt1', status: 'open' } as unknown as Ticket
+    const result = policy.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, [open])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('ticket-already-open')
+  })
+})
+
+describe('DirectionPolicy v3 fail-closed default', () => {
+  it('refuses an empty allowlist instead of reading it as "no restriction"', () => {
+    const v3 = new DirectionPolicy({ version: 'v3' })
+    const result = v3.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-allowlist-unset')
+  })
+
+  it('refuses an empty allowlist even when the row names no repo (no array is not a bypass)', () => {
+    const v3 = new DirectionPolicy({ version: 'v3', autonomousRepos: [] })
+    const result = v3.gate(facts({ repoPath: '' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-allowlist-unset')
+  })
+
+  it('treats an all-blank allowlist as unset, not as a wildcard', () => {
+    const v3 = new DirectionPolicy({ version: 'v3', autonomousRepos: ['   ', ''] })
+    const result = v3.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-allowlist-unset')
+  })
+
+  it('admits any repo only behind an explicit opt-in, never behind an empty array', () => {
+    const optedIn = new DirectionPolicy({ version: 'v3', allowAnyRepo: true })
+    expect(optedIn.gate(facts({ repoPath: '' }), thread, []).admissible).toBe(true)
+    expect(optedIn.gate(facts({ repoPath: 'E:\\repos\\anything' }), thread, []).admissible).toBe(true)
+  })
+
+  it('keeps the repo layer ahead of the ticket layer: empty allowlist refuses first', () => {
+    const v3 = new DirectionPolicy({ version: 'v3' })
+    const open = { id: 'tkt1', status: 'open' } as unknown as Ticket
+    const result = v3.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, [open])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-allowlist-unset')
   })
 })

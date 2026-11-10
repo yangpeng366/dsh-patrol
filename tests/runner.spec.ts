@@ -32,7 +32,7 @@ describe('PatrolRunner', () => {
     const source = new LocalJsonSource({ path: file })
     const dispatcher = new LogDispatcher()
     const engine = new Engine({
-      policy: new DirectionPolicy({ version: 'v1' }),
+      policy: new DirectionPolicy({ version: 'v1', allowAnyRepo: true }),
       assessor: { assess: async () => ({ kind: 'accept', title: '到期方向', scope: 'D:\\gitAll\\demo', reason: 'ok', rules: ['next-step-present'] }) },
       acceptMode: 'auto',
       now: () => new Date('2026-11-10T02:00:00.000Z'),
@@ -59,7 +59,7 @@ describe('PatrolRunner', () => {
     const source = new LocalJsonSource({ path: file })
     const dispatcher = new LogDispatcher()
     const engine = new Engine({
-      policy: new DirectionPolicy({ version: 'v1' }),
+      policy: new DirectionPolicy({ version: 'v1', allowAnyRepo: true }),
       assessor: { assess: async () => ({ kind: 'accept', title: '到期方向', scope: 'D:\\gitAll\\demo', reason: 'ok', rules: ['next-step-present'] }) },
       acceptMode: 'auto',
       now: () => new Date('2026-11-10T02:00:00.000Z'),

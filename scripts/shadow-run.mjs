@@ -1,6 +1,9 @@
 // One observe-mode shadow round against the real direction table: read-only, no dispatch, no write-back.
 //
-//   node scripts/shadow-run.mjs --log .artifacts/patrol-decisions.jsonl
+//   node scripts/shadow-run.mjs --log .artifacts/patrol-decisions.jsonl --repos 'E:\gitAll\openeyes'
+//
+// Policy v3 refuses every row when --repos is empty (repo-allowlist-unset). --any-repo restores the
+// pre-v3 "any repo" rule for a diagnostic run, and is the only way this script opts in.
 //
 // A round normally exists only in the host log. With --log (or PATROL_DECISION_LOG) every
 // DecisionRecord also lands in an append-only JSONL file, so scripts/policy-audit.mjs can
@@ -13,11 +16,12 @@ function arg(name, fallback = '') {
 }
 
 const logPath = arg('log', process.env.PATROL_DECISION_LOG ?? '')
-const policyVersion = arg('policy', 'shadow-2026-11-10')
+const policyVersion = arg('policy', 'v3-shadow')
 const autonomousRepos = arg('repos', process.env.PATROL_AUTONOMOUS_REPOS ?? '')
   .split(/[;,]/)
   .map((repo) => repo.trim())
   .filter(Boolean)
+const allowAnyRepo = process.argv.includes('--any-repo')
 
 const source = new BitableSource({
   baseToken: process.env.PATROL_BASE_TOKEN,
@@ -34,6 +38,7 @@ const config = {
   acceptMode: 'observe',
   decisionLogPath: logPath,
   autonomousRepos,
+  allowAnyRepo,
 }
 const decisionLog = createDecisionLog(config, {
   onError: (error) => console.error(`decision log write failed: ${String(error)}`),
@@ -70,7 +75,7 @@ console.log(`evaluated=${summary.evaluated} observed=${summary.observed} ignored
 const byReason = {}
 for (const d of decisions) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1
 console.log('reasons =', JSON.stringify(byReason))
-console.log(`autonomous repos = ${autonomousRepos.length ? autonomousRepos.join(' | ') : '(no allowlist: every row eligible)'}`)
+console.log(`autonomous repos = ${autonomousRepos.length ? autonomousRepos.join(' | ') : '(none: v3 refuses every row with repo-allowlist-unset)'}${allowAnyRepo ? ' [allowAnyRepo: diagnostic opt-in]' : ''}`)
 console.log('would-accept (held for review):')
 for (const d of decisions.filter((x) => x.verdict === 'observed')) {
   console.log(`  ${d.threadKey} :: ${d.wouldAccept?.title ?? ''} :: ${d.wouldAccept?.scope ?? ''}`)

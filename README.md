@@ -37,7 +37,7 @@ row (Bitable)  ──▶ Source.listItems()      ──▶ due rows only (row's 
                   source.writeBack()         current stage, next step, achievement
 ```
 
-Three rules hold it together:
+Four rules hold it together:
 
 1. **The Gate is code; the Assessment is the model.** Who may originate work is decided without a
    model. Whether the work is worth doing is decided by the model, on bounded facts only.
@@ -45,6 +45,8 @@ Three rules hold it together:
    so tightening the policy never silently rewrites work already in flight.
 3. **A row that did not change re-triggers nothing.** Trigger ids are content-addressed, so a
    round is cheap and a quiet row stays quiet.
+4. **An unset allowlist refuses; it never widens.** Since Policy v3 an empty `autonomousRepos` is
+   `repo-allowlist-unset`, not "every repo" — a forgotten setting must not become a permission.
 
 ## The column mapping
 
@@ -85,11 +87,12 @@ Then insert the bundle in your profile patch:
 | `baseToken` / `tableId` | — | the table to read (Bitable) |
 | `tasksFile` | — | the JSON file to read (local-json) |
 | `identity` | `user` | identity used for the Bitable read |
-| `policyVersion` | `v1` | recorded on every Mandate |
+| `policyVersion` | `v3` | recorded on every Mandate; v3 makes the repo allowlist fail-closed |
 | `paused` | `false` | a paused Policy admits nothing but keeps its rules |
 | `acceptMode` | `observe` | `off` / `observe` / `auto` |
 | `decisionLogPath` | — (off) | append-only JSONL of every decision; relative paths resolve against the process working directory |
-| `autonomousRepos` | `[]` | repo prefixes an unattended round may act inside; empty means no restriction, and once set a row with no repo, an uncloned repo, or a repo outside every prefix is refused |
+| `autonomousRepos` | `[]` | repo prefixes an unattended round may act inside; **empty refuses every row** (`repo-allowlist-unset`), and once set a row with no repo, an uncloned repo, or a repo outside every prefix is refused |
+| `allowAnyRepo` | `false` | explicit opt-in to the pre-v3 "any repo" rule, for tests and interactive callers only; never inferred from an empty `autonomousRepos` |
 | `roundIntervalMs` | `600000` | how often a round runs |
 | `dispatcher` | `log` | `log` / `codex` / `dsh` |
 
@@ -132,7 +135,8 @@ node scripts/shadow-run.mjs --log .artifacts/patrol-decisions.jsonl \
   --repos 'D:\gitAll\dsh-patrol;D:\gitAll\patrol-scaffold;E:\gitAll\openeyes'
 ```
 
-Same table, same day, with a 15-repo allowlist:
+Same table, same day, with a 15-repo allowlist (this run predates v3; v2 read the allowlist as
+opt-in):
 
 ```
 evaluated=78 observed=16 ignored=62 admitted=0
@@ -140,9 +144,23 @@ reasons = {"held-by-mode:observe":16,"repo-not-autonomous":42,"no-repo-path":8,
            "read-only-direction":8,"repo-not-cloned":2,"no-next-step":1,"needs-approval":1}
 ```
 
-The allowlist is opt-in on purpose: with `autonomousRepos` empty every row keeps the old
-behaviour, so an existing host does not change meaning on upgrade. `--log` writes the same
-append-only JSONL the plugin writes, so `scripts/policy-audit.mjs` can read a shadow round back.
+**Policy v3 changes the default.** The restriction is no longer opt-in: with `autonomousRepos` empty
+every unattended row is refused with `repo-allowlist-unset` before assessment, so an existing host
+that upgrades without configuring a list goes quiet instead of going wide. The old "any repo" rule
+survives only behind an explicit `allowAnyRepo: true`, which is meant for tests and interactive
+sessions — never for a scheduled round. The 16 would-accept rows of 2026-11-10 were classified one
+by one, and the resulting allowlist is in [`docs/policy-v3-allowlist.md`](docs/policy-v3-allowlist.md):
+
+```yaml
+config:
+  policyVersion: v3
+  autonomousRepos:
+    - 'E:\gitAll\openeyes'
+```
+
+`--log` writes the same append-only JSONL the plugin writes, so `scripts/policy-audit.mjs` can read
+a shadow round back. Prefixes are compared after normalising case, separators and trailing slashes,
+and a sibling directory (`dsh-patrol-old` next to `dsh-patrol`) is not inside the prefix.
 
 ## Decision audit（决策审计）
 
@@ -222,14 +240,16 @@ Override with `LARK_CLI=/path/to/lark-cli`.
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 47 tests
+pnpm test        # vitest run — 61 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 47 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 61 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 What the tests actually pin down: the Gate's refusals (needs-approval, read-only, approval state,
-no next step, ticket already open, paused), Mandate re-validation across a policy change,
+no next step, ticket already open, paused), the v3 repo default (empty allowlist refuses, explicit
+`allowAnyRepo` is the only way back, prefix hit/miss and case/separator normalisation, the repo
+layer staying ahead of the ticket layer), Mandate re-validation across a policy change,
 `observe`/`off` holding verdicts back, duplicate-trigger idempotency, content-addressed trigger
 ids, the row interval, the Bitable column mapping, and a round that survives a failing write-back.
 The decision log adds: one line per decision with no BOM and no truncation, a created directory, a

@@ -120,7 +120,7 @@ describe('DecisionLog', () => {
   })
 
   it('writes nothing when decisionLogPath is not configured', async () => {
-    const config = Config.parse({})
+    const config = Config.parse({ allowAnyRepo: true })
     expect(config.decisionLogPath).toBe('')
     const dir = tempDir()
     expect(createDecisionLog(config, { cwd: dir })).toBeUndefined()
@@ -138,7 +138,7 @@ describe('DecisionLog', () => {
 
 describe('Engine + DecisionLog', () => {
   it('records every round decision with its round id', async () => {
-    const config = Config.parse({ decisionLogPath: join(tempDir(), 'decisions.jsonl'), acceptMode: 'observe' })
+    const config = Config.parse({ allowAnyRepo: true, decisionLogPath: join(tempDir(), 'decisions.jsonl'), acceptMode: 'observe' })
     const log = createDecisionLog(config)!
     const engine = createEngine(config, { decisionLog: log })
     expect(engine.receive(trigger('trg1'))).toBe(true)

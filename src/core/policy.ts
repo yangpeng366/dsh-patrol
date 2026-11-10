@@ -48,7 +48,8 @@ export interface DirectionFacts {
   fake: boolean
   /**
    * Where the row's work lives, exactly as the source wrote it. Only the repo rules read it,
-   * and only when the Policy was given an allowlist; without one the field is ignored.
+   * and they read it on every unattended round: v3 refuses a row whose repo is not on the
+   * allowlist, including the case where no allowlist was configured at all.
    */
   repoPath?: string
 }
@@ -69,25 +70,35 @@ export class DirectionPolicy implements Policy {
   readonly inferredRules: readonly string[]
   readonly evalTimeoutMs: number
   /**
-   * Repo prefixes an unattended round may act inside. Empty means "no repo restriction",
-   * which is the behaviour every earlier Policy had. Prefixes are compared after
-   * normalising separators and case, so `D:/gitAll/openeyes` and `d:\gitall\openeyes` agree.
+   * Repo prefixes an unattended round may act inside. Empty is a refusal, not a wildcard:
+   * since Policy v3 an unset allowlist refuses every row with `repo-allowlist-unset`.
+   * Prefixes are compared after normalising separators and case, so `D:/gitAll/openeyes`
+   * and `d:\gitall\openeyes` agree.
    */
   readonly autonomousRepos: readonly string[]
+  /**
+   * Explicit opt-in to the pre-v3 "any repo" rule, for interactive callers and unit tests.
+   * It is never inferred from an empty `autonomousRepos`: forgetting to configure an allowlist
+   * must not mean "all repos allowed" — that fail-open default is exactly what v3 removes.
+   */
+  readonly allowAnyRepo: boolean
 
   constructor(options: {
     version: string
     paused?: boolean
     inferredRules?: readonly string[]
     evalTimeoutMs?: number
-    /** Repo prefixes an unattended round may act inside; empty means no restriction. */
+    /** Repo prefixes an unattended round may act inside; empty refuses every row. */
     autonomousRepos?: readonly string[]
+    /** Opt in to the old "any repo" rule. Defaults to false and is never implied by an empty list. */
+    allowAnyRepo?: boolean
   }) {
     this.version = options.version
     this.paused = options.paused ?? false
     this.inferredRules = options.inferredRules ?? ['next-step-present']
     this.evalTimeoutMs = options.evalTimeoutMs ?? 120_000
     this.autonomousRepos = (options.autonomousRepos ?? []).map(normaliseRepo).filter(Boolean)
+    this.allowAnyRepo = options.allowAnyRepo ?? false
   }
 
   gate(trigger: Trigger, thread: Thread, tickets: Ticket[]): GateResult {
@@ -125,13 +136,18 @@ export class DirectionPolicy implements Policy {
   /**
    * The repo-layer refusal, or nothing when the row may proceed.
    *
-   * An allowlist is opt-in: with none configured every row keeps the old behaviour. With one,
-   * a row that names no repo, names an uncloned repo, or points outside every prefix is refused
-   * before it can reach the Assessment. This is the rule that keeps 现场 repositories and rows
-   * whose scope is a sentence out of an unattended round.
+   * Policy v3 is fail-closed: no allowlist means no unattended work, never "any repo". A row that
+   * names no repo, names an uncloned repo, or points outside every configured prefix is refused
+   * before it can reach the Assessment. This is the rule that keeps 现场 repositories, release
+   * rows and rows whose scope is a sentence out of an unattended round.
+   *
+   * `allowAnyRepo` is the only way back to the pre-v3 behaviour, and it has to be written down by
+   * the caller. An empty array must not be a bypass: `[]` is what a forgotten setting looks like,
+   * so treating it as "all repos" is precisely the fail-open default this version removes.
    */
   private refuseRepo(facts: DirectionFacts): string | undefined {
-    if (this.autonomousRepos.length === 0) return undefined
+    if (this.allowAnyRepo) return undefined
+    if (this.autonomousRepos.length === 0) return 'repo-allowlist-unset'
     const raw = String(facts.repoPath ?? '').trim()
     const repo = normaliseRepo(raw)
     if (!repo) return 'no-repo-path'

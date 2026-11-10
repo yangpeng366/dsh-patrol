@@ -26,7 +26,7 @@ function trigger(id: string, overrides: Record<string, unknown> = {}): Trigger {
 function engine(options: { mode?: 'off' | 'observe' | 'auto'; collaborate?: string } = {}) {
   const started: { ticket: Ticket; assignment: Assignment }[] = []
   const decisions: string[] = []
-  const policy = new DirectionPolicy({ version: 'v1' })
+  const policy = new DirectionPolicy({ version: 'v1', allowAnyRepo: true })
   const instance = new Engine({
     policy,
     assessor: {
@@ -121,7 +121,7 @@ describe('Engine rounds', () => {
   })
 
   it('records an unavailable assessment without opening a ticket', async () => {
-    const policy = new DirectionPolicy({ version: 'v1' })
+    const policy = new DirectionPolicy({ version: 'v1', allowAnyRepo: true })
     const instance = new Engine({
       policy,
       assessor: { assess: async () => ({ kind: 'unavailable', reason: 'model-timeout' }) },

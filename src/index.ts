@@ -36,8 +36,8 @@ export const Config = z.object({
   tasksFile: z.string().default(''),
   /** Identity used for the Bitable read. */
   identity: z.enum(['user', 'bot']).default('user'),
-  /** Version of the Policy; a change is recorded on every Mandate. */
-  policyVersion: z.string().default('v1'),
+  /** Version of the Policy; a change is recorded on every Mandate. v3 = fail-closed repo allowlist. */
+  policyVersion: z.string().default('v3'),
   /** Whether the Policy admits anything at all. */
   paused: z.boolean().default(false),
   /** `observe` records what would have been accepted and starts nothing. */
@@ -48,11 +48,17 @@ export const Config = z.object({
    */
   decisionLogPath: z.string().default(''),
   /**
-   * Repo prefixes an unattended round may act inside. Empty means "no repo restriction" (the
-   * old behaviour). Once set, a row with no repo, an uncloned repo, or a repo outside every
-   * prefix is refused by the Gate before assessment - 现场 repositories stay out by default.
+   * Repo prefixes an unattended round may act inside. Empty refuses every unattended row with
+   * `repo-allowlist-unset` - v3 is fail-closed, so a forgotten allowlist cannot widen anything.
+   * Once set, a row with no repo, an uncloned repo, or a repo outside every prefix is refused
+   * by the Gate before assessment - 现场 repositories stay out by default.
    */
   autonomousRepos: z.array(z.string()).default([]),
+  /**
+   * Explicit opt-in to the pre-v3 "any repo" rule. Defaults to false and is never implied by an
+   * empty `autonomousRepos`: only tests and interactive callers should set it.
+   */
+  allowAnyRepo: z.boolean().default(false),
   /** How often a round runs. */
   roundIntervalMs: z.number().int().min(1_000).default(600_000),
   /** Where admitted work goes. */
@@ -129,6 +135,7 @@ export function createEngine(
     version: config.policyVersion,
     paused: config.paused,
     autonomousRepos: config.autonomousRepos,
+    allowAnyRepo: config.allowAnyRepo,
   })
   const dispatcher = options.dispatcher ?? new LogDispatcher()
   const decisionLog = options.decisionLog
