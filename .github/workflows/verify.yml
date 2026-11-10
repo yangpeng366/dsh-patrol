@@ -1,0 +1,64 @@
+# CI for dsh-patrol: the local release gate, run on GitHub.
+#
+# `node scripts/release-check.mjs` is the one command that answers "may this tarball ship?"
+# (README §Verification). Until this workflow existed it only ran on the author's machine, so a
+# clone had no way to tell whether `main` was green. These jobs run the same gate on a clean Linux
+# runner: same commands, same order, no `|| true`, no `continue-on-error`, no platform skip. A red
+# step here is a red clone.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per branch: a new push supersedes the one it replaces, so an outdated run neither holds
+# the queue nor reports a verdict about code that is no longer at the tip.
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only by default: nothing here writes to the repository, and `pnpm pack` puts its tarball in
+# the runner's temp directory.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: release gate (node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      # Version is `package.json` → "packageManager": "pnpm@11.7.0", not a guess. `run_install:
+      # false` because the install is the step under test below — it must not happen a second time,
+      # implicitly, inside the action.
+      - name: pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      # `--frozen-lockfile`, not a repair install: a lockfile that disagrees with package.json is a
+      # finding, and it must fail here instead of being silently rewritten on the runner.
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: test
+        run: pnpm test
+
+      # Runs typecheck/test/build a second time inside the gate, then judges the packed artifact:
+      # contents, absence of clone-only material, the unpacked CLI, and version/CHANGELOG agreement.
+      - name: release check
+        run: node scripts/release-check.mjs

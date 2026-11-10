@@ -430,6 +430,11 @@ pnpm build       # tsdown
 
 Current state: typecheck clean, 81 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
+CI runs these four steps on every push to `main` and every pull request, on a clean `ubuntu-latest`
+runner with Node 22 (`.github/workflows/verify.yml`): `pnpm install --frozen-lockfile`, then
+`pnpm typecheck`, then `pnpm test`, then `node scripts/release-check.mjs`. There is no
+`continue-on-error` and no platform skip, so a red step there is a red clone.
+
 One command runs all three and then judges the artifact itself (`scripts/` is clone-only, so this is
 for a clone, not for an install):
 
