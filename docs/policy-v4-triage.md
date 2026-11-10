@@ -32,7 +32,7 @@ would-accept 已经是 16。本文按 **68 条那份**逐条定性（它才是�
 | 1 | `excluded` | `巡检间隔(分钟)` 为 0 或空（停跑），或 `下一步` 为空 | `schedule-stopped`（v4 新增）/ `no-next-step` |
 | 2 | `read-only` | `授权边界`=只读，或 `当前阶段`=维护且下一步只是复核/观察 | `read-only-direction`；观察类已由 `action-type` 事实覆盖（§6.2），结构化列仍缺（§7） |
 | 3 | `approval` | `授权边界`=需审批，或下一步涉及现场部署/发布/密钥/生产配置/用户拍板 | `needs-approval`；其余由 `action-type` 事实逐类拒绝（§6.2） |
-| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `repo-exists`（§6.1）+ `next-step-present` + `action-type`（§6.2）；结构化列与 `autonomousRepos` 仍缺（§7） |
+| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `repo-exists`（§6.1）+ `next-step-present` + `action-type`（§6.2）；「纯路径」列与 `autonomousRepos` 仍缺（§7） |
 
 「巡检间隔 0 = 停跑」不是本文的推断，是这张表自己的约定。`巡检占用` 列在三条行上把它写成了字：
 
@@ -210,9 +210,9 @@ replay-v2-would-accept=4
 
 | 结论 | 条数 | 是哪几条 |
 | --- | --- | --- |
-| `repo-exists-ok`（一个可达目录） | 50 | — |
+| `repo-exists-ok`（一个可达目录） | 53 | — |
 | `repo-empty-cell`（单元格为空） | 8 | `recvsrhBJOxQzB`、`recvsHOAmvVKKN`、`recvu7wY55xF0d`、`recvuwUETuVUFP`、`recvuAVEyLRBrl`、`recvuHteD72BrV`、`recvuHteD7SE4V`、`reczz28TUTVTEBux` |
-| `repo-path-ambiguous`（一格多义） | 4 | 路径后接注释：`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN`；两仓相加：`reczz28QlJEjtOYY` |
+| `repo-path-ambiguous`（一格多义） | 1 | 两仓相加：`reczz28QlJEjtOYY`（`D:\gitAll\mpd + D:\gitAll\mpd-front`） |
 | `repo-missing`（目录已不在） | 3 | `recvriLOrY7RIA`、`recvtR2SwGbGXn`、`recvwtYIV3rvD1` |
 | `repo-path-relative-unresolved`（相对路径，无基准） | 1 | `recvsp1tyH5vPi` |
 | `repo-not-a-directory`（是文件） | 1 | `recvtcIOa5kYqH` |
@@ -220,9 +220,9 @@ replay-v2-would-accept=4
 
 ```triage-repo-tally
 records=68
-reason-repo-exists-ok=50
+reason-repo-exists-ok=53
 reason-repo-empty-cell=8
-reason-repo-path-ambiguous=4
+reason-repo-path-ambiguous=1
 reason-repo-missing=3
 reason-repo-path-relative-unresolved=1
 reason-repo-not-a-directory=1
@@ -231,9 +231,11 @@ reason-repo-not-cloned=1
 
 三处要分开看，它们以前被同一句「不可探测」混在一起：
 
-1. **混写不是不存在**。`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN` 指向的目录其实在盘上，
-   是同一格里又跟了「（DSH 本体未克隆；上游 …）」。旧口径说「探测失败」，新事实说「目录在，但这格同时说了别的」
-   （`repo-path-ambiguous`，`candidates[0].annotation` 保留原话）。
+1. **混写曾经不是不存在**。`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN` 三行的 `仓库路径`
+   原写成「路径 + （DSH 本体未克隆；上游 …）」：目录在盘上，但一格多义，判 `repo-path-ambiguous`，
+   `candidates[0].annotation` 保留原话。现表这三格已是纯路径（`D:\gitAll\dsh-superagent-prototype`），
+   于是它们转为 `repo-exists-ok`：`repo-exists-ok` 50 → 53，`repo-path-ambiguous` 4 → 1。
+   旧口径的「探测失败」对这三行不再成立——**表改了，事实跟着变，文档也跟着变**，三处由同一个脚本兜住。
 2. **vault 目录是目录**。`recvuwiIQze18J`、`reczz28QOfrbeaIn`、`reczz28QkmRdCFEv` 指向 Obsidian vault，
    存在性事实为真（`repo-exists-ok`）；它们不是**代码仓**，那件事 `repo-exists` 证明不了，仍归白名单与动作类型。
 3. **「不在盘上」有三条**。`recvwtYIV3rvD1`（`pi-agent-cloud`）在 §3 里已是停跑，`recvriLOrY7RIA`（fastjson2）
@@ -241,6 +243,8 @@ reason-repo-not-cloned=1
 
 这就是 §7 里「仓库路径需要一个纯路径列」的由来：`auto` 的最后一道判据是「真实存在的本地仓」，
 `repo-exists` 现在能回答「这一格是不是一个可达目录」，但回答不了「是不是这一格的仓」。
+混写那三行现表已自己改干净，剩下一格仍写两仓（`D:\gitAll\mpd + D:\gitAll\mpd-front`）：
+一格一仓不是靠拆分单元格能解决的，得靠白名单按仓匹配。
 
 ## 6. 代码落点：两条事实 + 一层仓库判定，其余复用
 
@@ -252,7 +256,7 @@ reason-repo-not-cloned=1
 | `read-only`（维护 + 只复核/观察） | `action-type` 事实：`unclear`（无行动）或非仓内类型 | **v4 新增**（§6.2） |
 | `approval`（`授权边界`=需审批） | `needs-approval` | v3 已有 |
 | `approval`（现场/发布/密钥/生产配置/拍板） | `action-type` 事实：`action-field-ops` / `action-release` / `action-needs-secret` / `action-needs-config` / `action-needs-decision` | **v4 新增**（§6.2） |
-| `auto` | 仓库白名单 + `repo-exists` + `next-step-present` + `action-type`；仍缺结构化列，见 §7 | 部分（`repo-exists` 与 `action-type` 已在同一 v4 内补齐，§6.1 / §6.2） |
+| `auto` | 仓库白名单 + `repo-exists` + `next-step-present` + `action-type`；仍缺「纯路径」列与 `autonomousRepos`，见 §7 | 部分（`repo-exists` 与 `action-type` 已在同一 v4 内补齐，§6.1 / §6.2） |
 
 具体改动（`src/`）：
 
@@ -382,41 +386,41 @@ still-auto=7
 - **没有证据就是 `unclear`**，绝不默认 `repo-code`：观察结论（「复核完成，无漂移」）、英文模板句、
   空格子都落在这里，`reason` 写明缺什么。
 
-78 行的实测（同一模块、同一份表，由 `scripts/policy-triage-check.mjs` 重算）：
+78 行的实测（同一模块、同一份表，由 `scripts/policy-triage-check.mjs` 重算；表快照 rev 4419，列已回填）：
 
 ```triage-action
 records=78
-kind-unclear=19
+kind-unclear=18
 kind-secret=12
 kind-decision=11
 kind-field-ops=10
 kind-release=10
-kind-repo-code=9
+kind-repo-code=10
 kind-repo-doc=3
 kind-repo-test=2
 kind-config=2
-source-column=0
-source-text=78
+source-column=78
+source-text=0
 ```
 
 结论三句：
 
-1. **仓内可验证的改动只有 14 行**（repo-code 9 + repo-test 2 + repo-doc 3）。`unclear` 19 行占了四分之一，
+1. **仓内可验证的改动只有 15 行**（repo-code 10 + repo-test 2 + repo-doc 3）。`unclear` 18 行占了近四分之一，
    那些行写的是「复核完成，无漂移」这样的观察结论 —— 它们本来就不该被当成「下一步」。
 2. **45 行在动作层就被拒**（secret 12 + field-ops 10 + release 10 + config 2 + decision 11）。这些行过去要靠
    人读 `下一步` 才看得出「这不是无人值守能做的」，现在有机器可复算的理由：`action-needs-secret` /
    `action-field-ops` / `action-release` / `action-needs-config` / `action-needs-decision`。
-3. **这仍是事实，不是许可**。事实带 evidence，Gate 只在有证据时才拒（缺证据 = `unclear` = 拒），不因为
-   「看着像仓内」就放行；但它是从自由文本推的，词表会漏（「去 45 环境看一眼」判 field-ops，
-   「回头看一眼」不判），也会把「这步要发版」藏在别的说法里漏判。**结构化列已在代码里落地**：
-   `动作类型` 有合法值时列值优先，`source=column`，词表只做兜底与预填。本轮实测 `source-column=0` /
-   `source-text=78`：方向表这一列还没填，所以 78 行仍然全部是词表推的——下面这些数在列回填后要重算。
+3. **事实与许可仍要分开，但事实已经从词表挪到列。** 列回填后 78 行的 `kind` 全部来自「动作类型」列
+   （`source-column=78` / `source-text=0`）：Gate 读到的是表里写死的事实，不再是词表的一次读法。
+   残余风险随之换位——**列值要人维护**：列里写着 `repo-code` 而文字其实要发版时，列说了算（分歧留在
+   `alternatives` 里可查）；反过来，人改了「下一步」却没改列，列仍然赢。所以「改了文字就改列」成了这张表
+   现在的硬规矩，词表降级为预填工具与兜底（列缺失或为空时仍走它，行为与 d02b152 逐字一致）。
 
 ## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
 | 缺的事实 | 谁产 | 用在哪 | 不补的后果 |
 | --- | --- | --- | --- |
 | `repoExists`（存在且是目录） | **已落地**：`inspectRepoPath()`，`itemToTrigger()` 每轮探测一次，写进 `DirectionFacts`（§6.1） | `auto` 的「真实存在的本地仓」 | 已补齐；它只证明「这一格是一个可达目录」，不证明「是 git 仓 / 是本行的仓」（§9.4） |
-| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | **已落地**：结构化列 + `inspectAction()`。列里有合法值即 `source=column`，列缺失/为空才走词表（`source=text`），每轮写进 `DirectionFacts`（§6.2） | `auto` 的「下一步是仓内可验证的改动」 | 列值写错时判 `unclear` 而不是猜；列未回填时仍是词表预测（本轮 `source-column=0`） |
+| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | **已落地**：结构化列「动作类型」已建并回填 78 行（表快照 rev 4419）+ `inspectAction()`。列里有合法值即 `source=column`，列缺失/为空才走词表（`source=text`），每轮写进 `DirectionFacts`（§6.2） | `auto` 的「下一步是仓内可验证的改动」 | 列值写错时判 `unclear` 而不是猜；列值需人维护——改了「下一步」没改列时列仍然赢（§6.2 结论 3） |
 | 纯路径列（与注释分开） | 方向表 | 同上 | 「路径 + 注释」混写让存在性探测误判（3 条样本） |
 | 「观察」标记 | 方向表 | `read-only`（维护 + 只复核） | 口径第 2 条后半句无法结构化，只能人判 |
 | 巡检间隔「0」与「空」的区分 | 方向表 / `normalizeItem` | 审计可读性 | 两者都拒绝（fail-closed），但日志里分不清「明确停跑」与「忘了填」 |
@@ -426,7 +430,7 @@ source-text=78
 
 `repo-exists` 与 `action-type` 都已在同一 v4 内补齐（§6.1 / §6.2）：前者证明「有一个可达目录」，
 后者把「下一步是仓内可验证的改动」从人读口径变成带证据的事实，并且已经能直接读结构化列。剩下的缺口是
-**列本身的数据**（方向表「动作类型」78 行尚未回填，本轮 `source-column=0`；「纯路径」列还未建）与
+**列本身的数据**（方向表「动作类型」78 行已回填，本轮 `source-column=78`；「纯路径」列还未建）与
 `autonomousRepos` 覆盖。`acceptMode` 仍是 `observe`，`auto` 仍是 0 —— 事实到位不等于许可到位。
 
 ## 8. 验证
@@ -440,14 +444,14 @@ node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl 
                                     total 78, observed 68, ignored 10, wouldAccept 68
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110-v2.jsonl --json
                                     total 78, observed 16, ignored 62, wouldAccept 16
-node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NBY5_20261111_060500_289.ndjson
+node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NBY5_20261111_075800_4419.ndjson
                                     table:coverage 68/68 · table:verdicts ok · table:structure ok ·
                                     repo:table 8/8 · repo:counts 8 candidates / 7 ok / 1 empty / still auto 7 ·
-                                    repo:tally 68 records（50 ok / 8 empty / 4 ambiguous / 3 missing /
+                                    repo:tally 68 records（53 ok / 8 empty / 1 ambiguous / 3 missing /
                                     1 relative / 1 file / 1 not-cloned）·
-                                    action:counts 78 rows（unclear 19 / secret 12 / decision 11 /
-                                    field-ops 10 / release 10 / repo-code 9 / repo-doc 3 / repo-test 2 /
-                                    config 2；source-column 0 / source-text 78）·
+                                    action:counts 78 rows（unclear 18 / secret 12 / decision 11 /
+                                    field-ops 10 / release 10 / repo-code 10 / repo-doc 3 / repo-test 2 /
+                                    config 2；source-column 78 / source-text 0）·
                                     summary:counts ok · RESULT: PASS
 ```
 
