@@ -18,7 +18,7 @@ import { DecisionLog } from './core/decision-log.ts'
 import { DirectionPolicy } from './core/policy.ts'
 import { FunctionAssessor, type Assessor } from './core/eval.ts'
 import { BitableSource } from './source/bitable.ts'
-import { LocalJsonSource } from './source/local-json.ts'
+import { LocalJsonFileSource, LocalJsonSource } from './source/local-json.ts'
 import type { SourceProvider } from './source/provider.ts'
 import { CodexDispatcher, DshDispatcher, LogDispatcher, type Dispatcher, type DshSessionController } from './dispatch.ts'
 import { readPackagedSkill, skillResourceBase } from './skill.ts'
@@ -71,17 +71,24 @@ export type PatrolConfig = z.infer<typeof Config>
 
 export const name = 'dsh-patrol'
 /**
- * Host services this plugin actually reads: the session controller (only for the `dsh` dispatcher)
- * and the skill registry (to publish the packaged skill). Declaring a service here means the plugin
- * waits for it and is unloaded when it disappears, so the list stays short and honest.
+ * Host services this plugin actually reads: the skill registry (to publish the packaged skill).
+ * Declaring a service here means the plugin waits for it and is unloaded when it disappears, so the
+ * list stays short and honest.
+ *
+ * `sessionController` is deliberately **not** listed: only `dispatcher: dsh` needs it, and a host
+ * that boots without `@deepseek-ai/dsh-api-session-controller` would otherwise keep this plugin
+ * `pending (waiting for service: sessionController)` forever — no round, no skill, no ticket. It is
+ * resolved lazily in `createDispatcher`, where the `dsh` dispatcher fails loudly if it is missing.
  */
-export const inject = ['sessionController', 'skills']
+export const inject = ['skills']
 
 /** Builds the Source named by the configuration. */
 export function createSource(config: PatrolConfig): SourceProvider {
   if (config.kind === 'local-json') {
     if (!config.tasksFile) throw new Error('dsh-patrol: kind=local-json needs tasksFile')
-    return new LocalJsonSource({ path: config.tasksFile })
+    // The host round must be able to write its result back, so a loaded plugin uses the
+    // read/write class; `LocalJsonSource` stays the read-only fixture source for tests.
+    return new LocalJsonFileSource({ path: config.tasksFile })
   }
   if (!config.baseToken || !config.tableId) throw new Error('dsh-patrol: kind=bitable needs baseToken and tableId')
   return new BitableSource({ baseToken: config.baseToken, tableId: config.tableId, identity: config.identity })
@@ -216,7 +223,7 @@ export type { DecisionLogEntry } from './core/decision-log.ts'
 export { DirectionPolicy } from './core/policy.ts'
 export { BitableSource } from './source/bitable.ts'
 export { CodexDispatcher, DshDispatcher, LogDispatcher } from './dispatch.ts'
-export { LocalJsonSource } from './source/local-json.ts'
+export { LocalJsonFileSource, LocalJsonSource } from './source/local-json.ts'
 export { PatrolRunner } from './runner.ts'
 export { itemToTrigger, itemIsDue } from './mapping.ts'
 export { readPackagedSkill } from './skill.ts'

@@ -5,10 +5,9 @@
  * plugin without a Feishu account.
  *
  * Two classes share the same file format:
- *   - `LocalJsonSource` is read-only and is what the plugin uses (the plugin's write-back path
- *     assumes a durable backend owned by someone else);
- *   - `LocalJsonFileSource` also writes back, which is what the `patrol` CLI uses so a round can
- *     be rehearsed end to end without a Bitable table.
+ *   - `LocalJsonSource` is read-only, and is what the fixture-driven tests use;
+ *   - `LocalJsonFileSource` also writes back, which is what the `patrol` CLI and the loaded host
+ *     plugin use (`createSource`) so a round can run end to end without a Bitable table.
  */
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { normalizeItem, type DirectionItem, type SourceProvider, type WriteBackField } from './provider.ts'
