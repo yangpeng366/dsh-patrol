@@ -1,0 +1,40 @@
+[
+  {
+    "id": "row-1",
+    "title": "示例方向 A",
+    "description": "契约自测用的样例行",
+    "nextStep": "跑一轮 dry-run",
+    "priority": "P0",
+    "intervalMin": 0,
+    "repoPath": "D:\\gitAll\\demo-a",
+    "threadId": null,
+    "fake": false,
+    "lastRun": null,
+    "currentStage": "待处理",
+    "achievement": "",
+    "authorization": "自主",
+    "collaboration": "sparse",
+    "approval": "已通过",
+    "pendingAction": "",
+    "category": "工作项目"
+  },
+  {
+    "id": "row-2",
+    "title": "示例方向 B",
+    "description": "契约自测用的样例行",
+    "nextStep": "等下一轮",
+    "priority": "P1",
+    "intervalMin": 1440,
+    "repoPath": "D:\\gitAll\\demo-b",
+    "threadId": "thread-abc",
+    "fake": true,
+    "lastRun": "2026-11-10T10:00:00.000+08:00",
+    "currentStage": "完成",
+    "achievement": "上一轮做过一轮",
+    "authorization": "需审批",
+    "collaboration": "approve",
+    "approval": "待审",
+    "pendingAction": "等审批",
+    "category": "兴趣研究"
+  }
+]

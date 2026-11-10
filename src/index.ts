@@ -11,6 +11,7 @@
  * know what a spreadsheet is.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-skill'
 import { z } from 'zod'
 import { Engine, type DecisionRecord } from './core/engine.ts'
 import { DirectionPolicy } from './core/policy.ts'
@@ -18,7 +19,8 @@ import { FunctionAssessor, type Assessor } from './core/eval.ts'
 import { BitableSource } from './source/bitable.ts'
 import { LocalJsonSource } from './source/local-json.ts'
 import type { SourceProvider } from './source/provider.ts'
-import { CodexDispatcher, DshDispatcher, LogDispatcher, type Dispatcher } from './dispatch.ts'
+import { CodexDispatcher, DshDispatcher, LogDispatcher, type Dispatcher, type DshSessionController } from './dispatch.ts'
+import { readPackagedSkill, skillResourceBase } from './skill.ts'
 import { PatrolRunner } from './runner.ts'
 
 /** Plugin configuration. */
@@ -50,7 +52,12 @@ export const Config = z.object({
 export type PatrolConfig = z.infer<typeof Config>
 
 export const name = 'dsh-patrol'
-export const inject = ['agents', 'sessionController', 'sessions', 'skills', 'tools', 'logger']
+/**
+ * Host services this plugin actually reads: the session controller (only for the `dsh` dispatcher)
+ * and the skill registry (to publish the packaged skill). Declaring a service here means the plugin
+ * waits for it and is unloaded when it disappears, so the list stays short and honest.
+ */
+export const inject = ['sessionController', 'skills']
 
 /** Builds the Source named by the configuration. */
 export function createSource(config: PatrolConfig): SourceProvider {
@@ -66,9 +73,9 @@ export function createSource(config: PatrolConfig): SourceProvider {
 export function createDispatcher(config: PatrolConfig, ctx?: Context): Dispatcher {
   if (config.dispatcher === 'codex') return new CodexDispatcher({ extraArgs: config.codexArgs })
   if (config.dispatcher === 'dsh') {
-    const controller = ctx?.get('sessionController' as never) as unknown as { prompt: (...args: never[]) => Promise<unknown> } | undefined
+    const controller = ctx?.get('sessionController') as DshSessionController | undefined
     if (!controller) throw new Error('dsh-patrol: dispatcher=dsh needs the sessionController service')
-    return new DshDispatcher(controller as never)
+    return new DshDispatcher(controller)
   }
   return new LogDispatcher()
 }
@@ -116,17 +123,40 @@ export async function apply(ctx: Context, rawConfig: unknown): Promise<void> {
   const engine = createEngine(config, { dispatcher, onDecision: (decision) => ctx.logger.info('dsh-patrol decision %s %s (%s)', decision.verdict, decision.threadKey, decision.reason) })
   const runner = new PatrolRunner({ source, engine, dispatcher })
 
-  const timer = setInterval(() => {
-    runner.runOnce().catch((error: unknown) => ctx.logger.error('dsh-patrol round failed: %s', String(error)))
-  }, config.roundIntervalMs)
+  // Publish the packaged skill: the host's filesystem provider only scans workspaces,
+  // so a skill shipped inside the plugin has to register itself to be discoverable.
+  const skill = readPackagedSkill('dsh-patrol')
+  ctx.effect(() => ctx.skills.register({
+    name: skill.name,
+    description: skill.description,
+    content: skill.content,
+    source: 'runtime',
+    resourceBase: skillResourceBase(skill),
+  }))
+
+  // One round at a time: a slow round must not overlap the next tick, and stopping the plugin
+  // waits for the round in flight so no write-back is lost half way.
+  let current: Promise<unknown> | null = null
+  let ready = false
+  const runRound = (): void => {
+    current = runner.runOnce()
+      .catch((error: unknown) => ctx.logger.error('dsh-patrol round failed: %s', String(error)))
+      .then(() => {
+        if (ready) return
+        ready = true
+        ctx.logger.info('dsh-patrol ready: source=%s acceptMode=%s dispatcher=%s', config.kind, config.acceptMode, dispatcher.kind)
+      })
+  }
+
+  const timer = setInterval(runRound, config.roundIntervalMs)
   timer.unref?.()
+  runRound()
 
   ctx.effect(() => async () => {
     clearInterval(timer)
+    if (current) await current
     ctx.logger.info('dsh-patrol stopped')
   })
-
-  ctx.logger.info('dsh-patrol ready: source=%s acceptMode=%s dispatcher=%s', config.kind, config.acceptMode, dispatcher.kind)
 }
 
 export { Engine } from './core/engine.ts'
@@ -136,5 +166,6 @@ export { CodexDispatcher, DshDispatcher, LogDispatcher } from './dispatch.ts'
 export { LocalJsonSource } from './source/local-json.ts'
 export { PatrolRunner } from './runner.ts'
 export { itemToTrigger, itemIsDue } from './mapping.ts'
+export { readPackagedSkill } from './skill.ts'
 export type { DirectionItem, SourceProvider } from './source/provider.ts'
 export type { Ticket, Trigger, Mandate, Assignment } from './core/model.ts'
