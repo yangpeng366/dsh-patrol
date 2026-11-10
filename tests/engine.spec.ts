@@ -3,6 +3,9 @@ import { Engine } from '../src/core/engine.ts'
 import { DirectionPolicy } from '../src/core/policy.ts'
 import type { Assignment, Ticket, Trigger } from '../src/core/model.ts'
 
+/** Repo work, as `itemActionFact()` reads it; a row without one is refused as `action-facts-unknown`. */
+const repoWork = { kind: 'repo-code', matched: ['实现'], evidence: '把下一步做完', field: '下一步', reason: '仓内动作', alternatives: [] }
+
 function trigger(id: string, overrides: Record<string, unknown> = {}): Trigger {
   return {
     id,
@@ -17,7 +20,7 @@ function trigger(id: string, overrides: Record<string, unknown> = {}): Trigger {
       nextStep: '把下一步做完',
       repoPath: 'D:\\gitAll\\demo',
       stage: '开发',
-      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] } },
+      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] }, actionFacts: repoWork },
       ...overrides,
     },
   }
@@ -65,7 +68,7 @@ describe('Engine rounds', () => {
 
   it('holds an inferred verdict in observe mode and starts nothing', async () => {
     const { instance, started, decisions } = engine({ mode: 'observe' })
-    instance.receive(trigger('trg1', { facts: { authorization: '自主', collaboration: 'approve', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] } } }))
+    instance.receive(trigger('trg1', { facts: { authorization: '自主', collaboration: 'approve', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] }, actionFacts: repoWork } }))
     const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
     expect(summary.observed).toBe(1)
     expect(summary.admitted).toBe(0)

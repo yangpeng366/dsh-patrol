@@ -7,6 +7,7 @@
  */
 import type { Mandate, Strength, Thread, Ticket, Trigger } from './model.ts'
 import type { RepoExistsFact } from './repo-facts.ts'
+import { actionRefusal, isRepoWork, type ActionFacts } from './action-facts.ts'
 
 /** One comparable form for a repo path: case, separator and trailing slashes all drop. */
 function normaliseRepo(repo: string): string {
@@ -70,6 +71,16 @@ export interface DirectionFacts {
    * fact is not a permission. `docs/policy-v4-triage.md` §6.1.
    */
   repoExists?: RepoExistsFact
+  /**
+   * What kind of work `下一步` asks for, read once per round by `inspectAction()`.
+   *
+   * The repo layer proves a row has a directory; it cannot prove the directory is where the work
+   * happens. Rows asking for 现场 work, a release, a secret, a Bitable/config change or a human
+   * decision passed every v4 rule and would have spent Assessment budget on work no unattended
+   * round may do. The fact is required on the same rule as `repoExists`: an unstated action type is
+   * not a licence. `docs/policy-v4-triage.md` §6.2.
+   */
+  actionFacts?: ActionFacts
 }
 
 /**
@@ -139,6 +150,10 @@ export class DirectionPolicy implements Policy {
     if (repoRefusal) return { admissible: false, reason: repoRefusal }
     const existenceRefusal = this.refuseUnprovenRepo(facts)
     if (existenceRefusal) return { admissible: false, reason: existenceRefusal }
+    // The repo layer answers "is there a directory"; this answers "is the work inside it". It runs
+    // after the repo layer so a missing repo keeps its own, more specific reason.
+    const actionRefused = this.refuseAction(facts)
+    if (actionRefused) return { admissible: false, reason: actionRefused }
 
     // One open Ticket per **repo**, not one per process: a direction table can hold several rows
     // that point at the same repo, and those are exactly the rows that must not become two lines
@@ -220,6 +235,23 @@ export class DirectionPolicy implements Policy {
     // A defective fact must not pass through its own "ok": the two fields have to agree.
     if (!fact.exists || fact.kind !== 'directory') return 'repo-not-a-directory'
     return undefined
+  }
+
+  /**
+   * The action layer: repo work may proceed, everything else is refused with its own reason.
+   *
+   * The verdict is read from `kind`, and a fact that claims a repo kind without any matched word is
+   * refused as `action-unclear`: a hand-built fact must not pass through its own label, the same
+   * rule `refuseUnprovenRepo()` applies to `reason: 'repo-exists-ok'`.
+   *
+   * A missing fact is refused too. The mapping fills it on every row, so its absence means the
+   * caller assembled the facts by hand and skipped the classifier — not that the work is in-repo.
+   */
+  private refuseAction(facts: DirectionFacts): string | undefined {
+    const fact = facts.actionFacts
+    if (!fact) return 'action-facts-unknown'
+    if (isRepoWork(fact.kind) && fact.matched.length === 0) return 'action-unclear'
+    return actionRefusal(fact.kind)
   }
 
   /**

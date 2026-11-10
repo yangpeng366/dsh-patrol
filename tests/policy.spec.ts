@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DirectionPolicy } from '../src/core/policy.ts'
+import type { ActionFacts } from '../src/core/action-facts.ts'
 import type { RepoExistsFact } from '../src/core/repo-facts.ts'
 import type { Thread, Ticket, Trigger } from '../src/core/model.ts'
 
@@ -14,6 +15,19 @@ function repoFact(overrides: Partial<RepoExistsFact> = {}): RepoExistsFact {
     normalizedPath: 'D:\\gitAll\\dsh-patrol',
     reason: 'repo-exists-ok',
     candidates: [],
+    ...overrides,
+  }
+}
+
+/** The fact `itemActionFact()` produces for a next step that is repo work. */
+function actionFact(overrides: Partial<ActionFacts> = {}): ActionFacts {
+  return {
+    kind: 'repo-code',
+    matched: ['实现'],
+    evidence: '把下一步做完',
+    field: '下一步',
+    reason: '「下一步」里是仓内可做的动作',
+    alternatives: [],
     ...overrides,
   }
 }
@@ -38,6 +52,8 @@ function trigger(overrides: Record<string, unknown> = {}): Trigger {
         intervalMin: 60,
         // The repo layer needs the probed cell too; `repo-exists-unknown` is a refusal.
         repoExists: repoFact(),
+        // And the action layer: repo work is what an unattended round may do.
+        actionFacts: actionFact(),
       },
       ...overrides,
     },
@@ -233,6 +249,71 @@ describe('DirectionPolicy repo-exists layer', () => {
     const result = allowlisted.gate(missing, thread, [open])
     expect(result.admissible).toBe(false)
     if (!result.admissible) expect(result.reason).toBe('repo-missing')
+  })
+})
+
+describe('DirectionPolicy action layer', () => {
+  // The repo layer is satisfied by a real directory; each case below changes only the action fact,
+  // so the assertion is about the new layer and not about the repo allowlist.
+  const policy = new DirectionPolicy({ version: 'v4', allowAnyRepo: true })
+
+  it('admits repo work: code, test and doc all pass', () => {
+    for (const kind of ['repo-code', 'repo-test', 'repo-doc'] as const) {
+      expect(policy.gate(facts({ actionFacts: actionFact({ kind }) }), thread, []).admissible).toBe(true)
+    }
+  })
+
+  it('refuses a row whose action needs a key, with its own reason', () => {
+    const result = policy.gate(facts({ actionFacts: actionFact({ kind: 'secret', matched: ['密钥'], field: '下一步' }) }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('action-needs-secret')
+  })
+
+  it('gives every non-repo kind a distinct reason the decision log can carry', () => {
+    for (const [kind, reason] of [
+      ['field-ops', 'action-field-ops'],
+      ['release', 'action-release'],
+      ['secret', 'action-needs-secret'],
+      ['config', 'action-needs-config'],
+      ['decision', 'action-needs-decision'],
+      ['unclear', 'action-unclear'],
+    ] as const) {
+      const result = policy.gate(facts({ actionFacts: actionFact({ kind, matched: [kind] }) }), thread, [])
+      expect(result.admissible).toBe(false)
+      if (!result.admissible) expect(result.reason).toBe(reason)
+    }
+  })
+
+  it('refuses a row with no action fact at all, because an unclassified action is not a licence', () => {
+    const result = policy.gate(facts({ actionFacts: undefined }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('action-facts-unknown')
+  })
+
+  it('refuses a repo-kind fact that carries no matched word', () => {
+    const result = policy.gate(facts({ actionFacts: actionFact({ matched: [] }) }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('action-unclear')
+  })
+
+  it('runs after the repo layer and before the ticket layer', () => {
+    const allowlisted = new DirectionPolicy({ version: 'v4', autonomousRepos: ['D:\\gitAll\\dsh-patrol'] })
+    const open = { id: 'tkt1', status: 'open', repoPath: 'D:\\gitAll\\dsh-patrol' } as unknown as Ticket
+    const missingRepo = facts({
+      repoPath: 'D:\\gitAll\\dsh-patrol',
+      repoExists: repoFact({ exists: false, kind: 'missing', reason: 'repo-missing' }),
+      actionFacts: actionFact({ kind: 'secret', matched: ['密钥'] }),
+    })
+    const missing = allowlisted.gate(missingRepo, thread, [open])
+    expect(missing.admissible).toBe(false)
+    if (!missing.admissible) expect(missing.reason).toBe('repo-missing')
+
+    const secret = allowlisted.gate(facts({
+      repoPath: 'D:\\gitAll\\dsh-patrol',
+      actionFacts: actionFact({ kind: 'secret', matched: ['密钥'] }),
+    }), thread, [open])
+    expect(secret.admissible).toBe(false)
+    if (!secret.admissible) expect(secret.reason).toBe('action-needs-secret')
   })
 })
 

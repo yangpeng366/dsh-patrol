@@ -46,7 +46,7 @@ function repoSection(options: { rows?: string[]; summary?: string; table?: boole
   ]
 }
 
-function doc(options: { rows?: string[]; summary?: string; repo?: string[] } = {}): string {
+function doc(options: { rows?: string[]; summary?: string; repo?: string[]; action?: string[] | null } = {}): string {
   const rows = options.rows ?? [
     '| 1 | `recRun` | 在跑的行 | D:\\gitAll\\run | 开发 | 60 | 自主 | 成功 | **approval** | 下一步要发版 |',
     '| 2 | `recStop` | 停跑的行 | D:\\gitAll\\stop | 维护 | 0 | 自主 | （空） | **excluded** | 停跑 |',
@@ -55,7 +55,9 @@ function doc(options: { rows?: string[]; summary?: string; repo?: string[] } = {
     'total=2', 'auto=0', 'approval=1', 'read-only=0', 'excluded=1',
     'replay-v1-schedule-stopped=1', 'replay-v1-would-accept=1',
   ].join('\n')
-  return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ...(options.repo ?? [])].join('\n')
+  // The fixture rows are `补一个单测` (repo-test) and `发布新版本` (release).
+  const action = options.action === undefined ? ['records=2', 'kind-repo-test=1', 'kind-release=1'] : options.action
+  return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ...(options.repo ?? []), ...(action === null ? [] : ['', '```triage-action', ...action, '```'])].join('\n')
 }
 
 function run(options: { markdown?: string; decisons?: string; table?: string } = {}): { stdout: string; status: number | null } {
@@ -194,6 +196,28 @@ describe('policy-triage-check', () => {
     expect(result.status).toBe(1)
     expect(result.stdout).toContain('FAIL repo:tally')
     expect(result.stdout).toContain('reason-repo-missing: doc 1, derived 2')
+  })
+
+  it('recomputes the action types of every dumped row and checks the published counts', () => {
+    const result = run()
+    expect(result.stdout).toContain('ok   action:counts')
+    // `补一个单测` is repo-test, `发布新版本` is release — the point is that it is measured, not read.
+    expect(result.stdout).toContain('repo-test 1')
+    expect(result.stdout).toContain('release 1')
+  })
+
+  it('fails when the action block disagrees with the dump', () => {
+    const result = run({ markdown: doc({ action: ['records=2', 'kind-repo-test=2'] }) })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL action:counts')
+    expect(result.stdout).toContain('kind-repo-test: doc 2, derived 1')
+  })
+
+  it('fails when the action block is missing although a dump was given', () => {
+    const result = run({ markdown: doc({ action: null }) })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL action:counts')
+    expect(result.stdout).toContain('no ```triage-action block')
   })
 
   it('skips the structural checks when no table dump is given, and says so', () => {

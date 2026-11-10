@@ -15,7 +15,7 @@ async function fixture(): Promise<{ file: string; dir: string }> {
     {
     // 巡检间隔: an interval is now a fact the Gate reads (Policy v4), so the "due" row carries a
     // real one; `lastRun: null` is what makes it due on the first round.
-      id: 'rec-due', title: '到期方向', nextStep: '做掉它', priority: 'P0', intervalMin: 60,
+      id: 'rec-due', title: '到期方向', nextStep: '实现到期方向的下一步', priority: 'P0', intervalMin: 60,
       authorization: '自主', collaboration: 'sparse', approval: '已通过', currentStage: '开发',
       // Policy v4 also reads the repo cell: a row pointing at a directory that is not there is
       // refused as `repo-missing`, so the fixture points at the temp directory it just created.
@@ -97,7 +97,7 @@ describe('PatrolRunner', () => {
     const row = rows.find((entry) => entry['id'] === 'rec-due')!
     expect(writeBackErrors).toEqual([])
     // The scope is not the row's next action: it must survive a round untouched.
-    expect(row['nextStep']).toBe('做掉它')
+    expect(row['nextStep']).toBe('实现到期方向的下一步')
     expect(String(row['achievement'])).toMatch(/^logged tkt_/)
   })
 })

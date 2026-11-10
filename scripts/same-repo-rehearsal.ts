@@ -71,7 +71,7 @@ export interface ScenarioResult {
 
 /** One row of the direction table, as the real mapping shapes it. */
 function trigger(rowId: string, repoPath: string, threadKey = `patrol:${rowId}`): Trigger {
-  const facts = { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath, repoExists: { raw: repoPath, exists: true, kind: 'directory' as const, normalizedPath: repoPath, reason: 'repo-exists-ok' as const, candidates: [] } }
+  const facts = { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath, repoExists: { raw: repoPath, exists: true, kind: 'directory' as const, normalizedPath: repoPath, reason: 'repo-exists-ok' as const, candidates: [] }, actionFacts: { kind: 'repo-code' as const, matched: ['实现'], evidence: '把这一步做完', field: '下一步' as const, reason: '仓内动作', alternatives: [] } }
   return {
     id: `trg_${rowId}`,
     source: 'direction-table',

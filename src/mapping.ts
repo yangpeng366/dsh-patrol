@@ -7,6 +7,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { DirectionFacts } from './core/policy.ts'
+import { inspectAction, type ActionFacts } from './core/action-facts.ts'
 import { inspectRepoPath, type RepoExistsFact, type RepoInspectOptions } from './core/repo-facts.ts'
 import type { Trigger } from './core/model.ts'
 import type { DirectionItem } from './source/provider.ts'
@@ -33,8 +34,25 @@ export function itemRepoFact(item: DirectionItem, options: RepoInspectOptions = 
   return inspectRepoPath(item.repoPath, options)
 }
 
+/**
+ * The row's action type, read once.
+ *
+ * Six of the row's own cells go in, in the table's own words: the classifier decides what each one
+ * is allowed to say (§6.2 of the triage doc). Nothing here reads a file or calls a model.
+ */
+export function itemActionFact(item: DirectionItem): ActionFacts {
+  return inspectAction({
+    nextStep: item.nextStep,
+    description: item.description,
+    userNote: item.userNote,
+    authorization: item.authorization,
+    contribution: item.contribution,
+    approval: item.approval,
+  })
+}
+
 /** The row's shape as the Gate sees it. */
-export function itemFacts(item: DirectionItem, repoExists?: RepoExistsFact): DirectionFacts {
+export function itemFacts(item: DirectionItem, repoExists?: RepoExistsFact, actionFacts?: ActionFacts): DirectionFacts {
   return {
     authorization: item.authorization,
     collaboration: item.collaboration,
@@ -47,6 +65,8 @@ export function itemFacts(item: DirectionItem, repoExists?: RepoExistsFact): Dir
     repoPath: item.repoPath,
     // Structured too: `仓库路径` is a cell, and "is there a repo there" is a filesystem answer.
     repoExists,
+    // And what the next step *is*: the repo cell says where, this says whether the work is inside it.
+    actionFacts: actionFacts ?? itemActionFact(item),
   }
 }
 
@@ -70,6 +90,7 @@ export function itemScope(item: DirectionItem): string {
  */
 export function itemToTrigger(item: DirectionItem, now: string, options: RepoInspectOptions = {}): Trigger {
   const repoExists = itemRepoFact(item, options)
+  const actionFacts = itemActionFact(item)
   const fingerprint = itemFingerprint(item, repoExists.exists ? 'exists' : 'missing')
   return {
     id: `trg_${item.id}_${fingerprint}`,
@@ -88,8 +109,9 @@ export function itemToTrigger(item: DirectionItem, now: string, options: RepoIns
       stage: itemStage(item),
       currentStage: item.currentStage,
       threadId: item.threadId,
-      facts: itemFacts(item, repoExists),
+      facts: itemFacts(item, repoExists, actionFacts),
       repoExists,
+      actionFacts,
     },
   }
 }

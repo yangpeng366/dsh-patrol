@@ -29,6 +29,22 @@
   `inspectRepoPath()` 重算 `docs/policy-v4-triage.md` §6.1 的 8 条候选与 §5 的 68 条分档，
   文档、机器可读块与探测结果三处必须一致。
 
+- `action-type`（Policy v4 补齐的动作类型事实）：`src/core/action-facts.ts` 把方向表的 `下一步` /
+  `简要描述` / `用户批注` / `授权边界` / `贡献类型` / `审批状态` 读成
+  `kind / matched / evidence / field / reason / alternatives`，判定 `repo-code` / `repo-test` /
+  `repo-doc` / `field-ops` / `release` / `secret` / `config` / `decision` / `unclear`。准入只认
+  `下一步`，拒绝可来自任何一格，最严者胜，无证据即 `unclear`（绝不默认 `repo-code`）。
+  `DirectionFacts.actionFacts` 承载该事实，Gate 在仓库层之后读它：非仓内 kind 各有独立理由
+  （`action-field-ops` / `action-release` / `action-needs-secret` / `action-needs-config` /
+  `action-needs-decision`），缺事实报 `action-facts-unknown`，事实自相矛盾报 `action-unclear`。
+  `acceptMode` 仍为 `observe`，`auto` 仍为 0。
+- `scripts/policy-triage-check.mjs` 新增 `action:counts`：用 Gate 自己的 `inspectAction()` 重算方向表
+  78 行的动作类型，与 `docs/policy-v4-triage.md` §6.2 的 `triage-action` 块逐项核对
+  （unclear 19 / secret 12 / decision 11 / field-ops 10 / release 10 / repo-code 9 / repo-doc 3 /
+  repo-test 2 / config 2）；文档块缺失或与表不符即非零退出。
+- `docs/policy-v4-triage.md` 新增 §6.2：动作类型的字段、准入与拒绝的不对称规则、78 行实测与残余风险
+  （词表会漏判，彻底消除仍需方向表新增结构化「动作类型」列，本模块届时降级为该列的预填工具）。
+
 ### Changed
 
 - `itemFingerprint()` 纳入 `intervalMin`：停跑→恢复会生成新 Trigger，否则恢复的行永远被判为重复事件。

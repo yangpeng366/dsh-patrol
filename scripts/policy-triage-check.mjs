@@ -23,6 +23,9 @@
  *      equals the counts that fall out of it. The 8 rows there are the ones §3 called
  *      "恢复后 auto 候选"; the point of the check is that "real local repo" is a fact now, not a
  *      reading of the cell.
+ *   6. action type: every row of the dump is classified with the Gate's own `inspectAction()`, and
+ *      the `triage-action` block equals the per-kind counts. §6.2 publishes those counts; the check
+ *      is what keeps them from becoming prose again.
  *
  *   node scripts/policy-triage-check.mjs
  *   node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md \
@@ -44,6 +47,11 @@ const repoModule = await import(new URL('../src/core/repo-facts.ts', import.meta
   throw new Error(`cannot load src/core/repo-facts.ts (needs Node >= 22.19 type stripping): ${messageOf(error)}`)
 })
 const inspectRepoPath = repoModule.inspectRepoPath
+
+const actionModule = await import(new URL('../src/core/action-facts.ts', import.meta.url).href).catch((error) => {
+  throw new Error(`cannot load src/core/action-facts.ts (needs Node >= 22.19 type stripping): ${messageOf(error)}`)
+})
+const inspectAction = actionModule.inspectAction
 
 const VERDICTS = ['auto', 'approval', 'read-only', 'excluded']
 
@@ -185,6 +193,9 @@ export function tableFacts(text) {
       authorization: cell(row['授权边界']),
       approval: cell(row['审批状态']),
       nextStep: cell(row['下一步']),
+      description: cell(row['简要描述']),
+      userNote: cell(row['用户批注']),
+      contribution: cell(row['贡献类型']),
       repoPath: cell(row['仓库路径']),
       // The untouched cell, for `inspectRepoPath()`: it does its own array/blank/annotation
       // handling, and a cell flattened by `cell()` would lose the shape the Gate sees.
@@ -395,10 +406,46 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
     } else if (repoBlock !== null) {
       record('repo:table', false, 'the ```triage-repo-exists block has no matching §6.1 table')
     }
+
+    // 6 — action type: every row of the dump, classified with the Gate's own module. There is no
+    // per-row table to anchor on, so the published block is the only place the numbers live; a
+    // missing block is a failure whenever a dump was supplied.
+    const actionBlock = parseKeyValueBlock(markdown, 'triage-action')
+    const actionDerived = { records: 0 }
+    const byKind = {}
+    for (const rowFacts of facts.values()) {
+      const fact = inspectAction({
+        nextStep: rowFacts.nextStep,
+        description: rowFacts.description,
+        userNote: rowFacts.userNote,
+        authorization: rowFacts.authorization,
+        contribution: rowFacts.contribution,
+        approval: rowFacts.approval,
+      })
+      actionDerived.records += 1
+      byKind[fact.kind] = (byKind[fact.kind] ?? 0) + 1
+      const key = `kind-${fact.kind}`
+      actionDerived[key] = (actionDerived[key] ?? 0) + 1
+    }
+    const expectedAction = actionBlock ?? {}
+    const wrongAction = Object.entries(actionDerived)
+      .filter(([key, value]) => expectedAction[key] !== value)
+      .map(([key, value]) => `${key}: doc ${expectedAction[key] ?? '(absent)'}, derived ${value}`)
+    const extraAction = Object.keys(expectedAction).filter((key) => !(key in actionDerived))
+    record(
+      'action:counts',
+      actionBlock !== null && wrongAction.length === 0 && extraAction.length === 0,
+      actionBlock === null
+        ? 'no ```triage-action block'
+        : [wrongAction.join(' · '), extraAction.length > 0 ? `unexpected keys: ${extraAction.join(', ')}` : ''].filter(Boolean).join(' · ')
+          || `${actionDerived.records} records · ${Object.entries(byKind).map(([kind, count]) => `${kind} ${count}`).join(' · ')}`,
+    )
+    report.action = { counts: byKind }
   } else {
     record('table:structure', true, 'skipped: no --table dump, so only coverage, vocabulary and the counts were checked')
     record('repo:table', true, 'skipped: no --table dump, so repo-exists was not recomputed')
     record('repo:tally', true, 'skipped: no --table dump, so the §5 tally was not recomputed')
+    record('action:counts', true, 'skipped: no --table dump, so the action types were not recomputed')
   }
 
   // 4 — the published numbers, compared key by key against what the doc's own rows say.
@@ -509,6 +556,9 @@ function main(argv) {
       for (const row of report.repo.rows) {
         lines.push(`    ${row.recordId}  exists=${String(row.exists).padEnd(5)} ${row.kind.padEnd(9)} ${row.reason.padEnd(22)} ${row.path || '(空)'}`)
       }
+    }
+    if (report.action) {
+      lines.push('', `  action type (recomputed from the dump): ${Object.entries(report.action.counts).map(([kind, count]) => `${kind} ${count}`).join(' · ')}`)
     }
     if (tableText === null && options.table === '') lines.push('  note: pass --table <dump.ndjson> to re-check the structured verdicts')
     lines.push('', report.ok ? 'RESULT: PASS' : 'RESULT: FAIL')

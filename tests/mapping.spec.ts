@@ -46,6 +46,20 @@ describe('mapping', () => {
     expect(itemFacts(base, itemRepoFact(base))).toMatchObject({ repoExists: { reason: 'repo-empty-cell' } })
   })
 
+  // Policy v4, second fact: the repo cell says where, the action fact says whether the work is
+  // inside it. Both come from the row and neither is a Gate-time guess.
+  it('carries the action type as a fact, read from the row\'s own cells', () => {
+    const row = { ...base, nextStep: '现场升级镜像后复验登录页', repoPath: 'D:\\gitAll\\dsh-patrol' }
+    expect(itemFacts(row).actionFacts).toMatchObject({ kind: 'field-ops', field: '下一步' })
+    expect(itemToTrigger(row, '2026-11-10T01:00:00.000Z', { probe: () => ({ kind: 'directory' }) }).meta['actionFacts'])
+      .toMatchObject({ kind: 'field-ops' })
+  })
+
+  it('defaults an unreadable next step to unclear, never to repo-code', () => {
+    const row = { ...base, nextStep: 'Review the saved Codex output' }
+    expect(itemFacts(row).actionFacts).toMatchObject({ kind: 'unclear' })
+  })
+
   it('passes the probe through, so a cell is read against the filesystem the caller names', () => {
     const seen: string[] = []
     const fact = itemRepoFact({ ...base, repoPath: 'relative\\repo' }, {

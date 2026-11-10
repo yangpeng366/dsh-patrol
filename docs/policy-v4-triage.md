@@ -30,9 +30,9 @@ would-accept 已经是 16。本文按 **68 条那份**逐条定性（它才是�
 | # | 判定 | 条件（结构化优先） | 落到 Gate 的哪个 reason |
 | --- | --- | --- | --- |
 | 1 | `excluded` | `巡检间隔(分钟)` 为 0 或空（停跑），或 `下一步` 为空 | `schedule-stopped`（v4 新增）/ `no-next-step` |
-| 2 | `read-only` | `授权边界`=只读，或 `当前阶段`=维护且下一步只是复核/观察 | `read-only-direction`；观察类目前无结构化字段（§7） |
-| 3 | `approval` | `授权边界`=需审批，或下一步涉及现场部署/发布/密钥/生产配置/用户拍板 | `needs-approval`；其余靠行级字段（§7） |
-| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `repo-exists`（同一 v4 内补齐，§6.1）+ `next-step-present`；仍缺动作类型（§7） |
+| 2 | `read-only` | `授权边界`=只读，或 `当前阶段`=维护且下一步只是复核/观察 | `read-only-direction`；观察类已由 `action-type` 事实覆盖（§6.2），结构化列仍缺（§7） |
+| 3 | `approval` | `授权边界`=需审批，或下一步涉及现场部署/发布/密钥/生产配置/用户拍板 | `needs-approval`；其余由 `action-type` 事实逐类拒绝（§6.2） |
+| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `repo-exists`（§6.1）+ `next-step-present` + `action-type`（§6.2）；结构化列与 `autonomousRepos` 仍缺（§7） |
 
 「巡检间隔 0 = 停跑」不是本文的推断，是这张表自己的约定。`巡检占用` 列在三条行上把它写成了字：
 
@@ -249,10 +249,10 @@ reason-repo-not-cloned=1
 | `excluded`（巡检间隔 0/空） | `schedule-stopped` | **v4 新增** |
 | `excluded`（`下一步` 为空） | `no-next-step` | v3 已有 |
 | `read-only`（`授权边界`=只读） | `read-only-direction` | v3 已有 |
-| `read-only`（维护 + 只复核/观察） | 需要结构化「动作类型」，见 §7 | 未落码 |
+| `read-only`（维护 + 只复核/观察） | `action-type` 事实：`unclear`（无行动）或非仓内类型 | **v4 新增**（§6.2） |
 | `approval`（`授权边界`=需审批） | `needs-approval` | v3 已有 |
-| `approval`（现场/发布/密钥/生产配置/拍板） | 需要结构化「动作类型」，见 §7 | 未落码 |
-| `auto` | 仓库白名单 + `repo-exists` + `next-step-present`；仍缺动作类型，见 §7 | 部分（`repo-exists` 已在同一 v4 内补齐，§6.1） |
+| `approval`（现场/发布/密钥/生产配置/拍板） | `action-type` 事实：`action-field-ops` / `action-release` / `action-needs-secret` / `action-needs-config` / `action-needs-decision` | **v4 新增**（§6.2） |
+| `auto` | 仓库白名单 + `repo-exists` + `next-step-present` + `action-type`；仍缺结构化列，见 §7 | 部分（`repo-exists` 与 `action-type` 已在同一 v4 内补齐，§6.1 / §6.2） |
 
 具体改动（`src/`）：
 
@@ -338,12 +338,63 @@ still-auto=7
    8 条候选里 `reczz28NeYXnjL5p` 与 `reczz28XYTeBuq2R` 指向同一个路径，更早的行里还有十几条也指向它。
    归属仍是人的事，`repo-exists` 只把「路径写没写、在不在」变成事实。
 
-## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
+### 6.2 `action-type`：动作类型、代码与 78 行的实测
 
+`src/core/action-facts.ts` 把一行方向表的**六个已有单元格**读成一个事实：`下一步` / `简要描述` /
+`用户批注` / `授权边界` / `贡献类型` / `审批状态`。
+
+| 字段 | 含义 |
+| --- | --- |
+| `kind` | `repo-code` / `repo-test` / `repo-doc` / `field-ops` / `release` / `secret` / `config` / `decision` / `unclear` |
+| `matched` | 命中的词（去重，按词表顺序） |
+| `evidence` | 命中的原句片段，空白折叠，不超过 80 字 |
+| `field` | 证据来自哪一格（表格自己的列名） |
+| `reason` | 为什么是这个 kind；`unclear` 时写明缺哪一格的什么 |
+| `alternatives` | 其余也命中的 kind，按最严在前，供审计 |
+
+准入与拒绝的规矩是**不对称**的，写成代码而不是猜：
+
+- **准入只认 `下一步`**。`简要描述` 是题目不是动作（"机构 API Key 存 DB" 说的是这个仓是什么，
+  不是这一步要 key），`用户批注` 是历史流水（只用来发现「还在等人拍板」的话）。所以 `用户批注` 里的
+  「代码」永远不能让一行通过。
+- **拒绝可以来自任何一格**。密钥 / 现场 / 发布 / 配置 / 拍板，任一格里出现就够了。
+- **最严者胜**：secret → field-ops → config → release → decision → repo-code → repo-test → repo-doc。
+  「代码已就位，等用户拍板」是 `decision`，不是 `repo-code`。
+- **没有证据就是 `unclear`**，绝不默认 `repo-code`：观察结论（「复核完成，无漂移」）、英文模板句、
+  空格子都落在这里，`reason` 写明缺什么。
+
+78 行的实测（同一模块、同一份表，由 `scripts/policy-triage-check.mjs` 重算）：
+
+```triage-action
+records=78
+kind-unclear=19
+kind-secret=12
+kind-decision=11
+kind-field-ops=10
+kind-release=10
+kind-repo-code=9
+kind-repo-doc=3
+kind-repo-test=2
+kind-config=2
+```
+
+结论三句：
+
+1. **仓内可验证的改动只有 14 行**（repo-code 9 + repo-test 2 + repo-doc 3）。`unclear` 19 行占了四分之一，
+   那些行写的是「复核完成，无漂移」这样的观察结论 —— 它们本来就不该被当成「下一步」。
+2. **45 行在动作层就被拒**（secret 12 + field-ops 10 + release 10 + config 2 + decision 11）。这些行过去要靠
+   人读 `下一步` 才看得出「这不是无人值守能做的」，现在有机器可复算的理由：`action-needs-secret` /
+   `action-field-ops` / `action-release` / `action-needs-config` / `action-needs-decision`。
+3. **这仍是事实，不是许可**。事实带 evidence，Gate 只在有证据时才拒（缺证据 = `unclear` = 拒），不因为
+   「看着像仓内」就放行；但它是从自由文本推的，词表会漏（「去 45 环境看一眼」判 field-ops，
+   「回头看一眼」不判），也会把「这步要发版」藏在别的说法里漏判。要彻底消除这类误判，仍需方向表新增
+   结构化「动作类型」列（§7），届时本模块降级为该列的预填工具。
+
+## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
 | 缺的事实 | 谁产 | 用在哪 | 不补的后果 |
 | --- | --- | --- | --- |
 | `repoExists`（存在且是目录） | **已落地**：`inspectRepoPath()`，`itemToTrigger()` 每轮探测一次，写进 `DirectionFacts`（§6.1） | `auto` 的「真实存在的本地仓」 | 已补齐；它只证明「这一格是一个可达目录」，不证明「是 git 仓 / 是本行的仓」（§9.4） |
-| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | 方向表新增结构化列，或 Assessment 产出可审计的 `rules` | `read-only` 的后半句、`approval` 的第二种 | 只能人读 `下一步` 判断；Gate 不许做关键词猜测 |
+| 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | **已落地（事实版）**：`inspectAction()`，`itemToTrigger()` 每轮算一次，写进 `DirectionFacts`（§6.2）；方向表新增结构化列仍待补 | `auto` 的「下一步是仓内可验证的改动」 | 词表漏判仍在；结构化列到位后本模块降级为预填工具（§6.2 结论 3） |
 | 纯路径列（与注释分开） | 方向表 | 同上 | 「路径 + 注释」混写让存在性探测误判（3 条样本） |
 | 「观察」标记 | 方向表 | `read-only`（维护 + 只复核） | 口径第 2 条后半句无法结构化，只能人判 |
 | 巡检间隔「0」与「空」的区分 | 方向表 / `normalizeItem` | 审计可读性 | 两者都拒绝（fail-closed），但日志里分不清「明确停跑」与「忘了填」 |
@@ -351,14 +402,16 @@ still-auto=7
 在这些事实到位之前，`auto` 只能由人工逐行确认 —— 这也正是 v4 之后 `auto` 仍为 0 的直接原因，
 不是「没有可自主的工作」，而是「可自主这件事还不能只靠现有字段证明」。
 
-`repo-exists` 已经不在上表里：它在同一 v4 内补齐（§6.1），于是 §2 第 4 条的两个前提只剩
-「下一步是仓内可验证的改动」仍然不可结构化。`acceptMode` 仍是 `observe`，`auto` 仍是 0。
+`repo-exists` 与 `action-type` 都已在同一 v4 内补齐（§6.1 / §6.2）：前者证明「有一个可达目录」，
+后者把「下一步是仓内可验证的改动」从人读口径变成带证据的事实。剩下的缺口是**结构化列**（方向表的
+「动作类型」与「纯路径」两列）与 `autonomousRepos` 覆盖。`acceptMode` 仍是 `observe`，`auto` 仍是 0 ——
+事实到位不等于许可到位。
 
 ## 8. 验证
 
 ```
 pnpm typecheck                      clean
-pnpm test                           14 files / 128 tests passed
+pnpm test                           15 files / 167 tests passed
 pnpm build                          ok
 node scripts/release-check.mjs      RESULT: PASS（8/8 必需文件、无禁入内容、解包 CLI 自检、版本一致）
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl --json
@@ -369,7 +422,10 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
                                     table:coverage 68/68 · table:verdicts ok · table:structure ok ·
                                     repo:table 8/8 · repo:counts 8 candidates / 7 ok / 1 empty / still auto 7 ·
                                     repo:tally 68 records（50 ok / 8 empty / 4 ambiguous / 3 missing /
-                                    1 relative / 1 file / 1 not-cloned）· summary:counts ok · RESULT: PASS
+                                    1 relative / 1 file / 1 not-cloned）·
+                                    action:counts 78 rows（unclear 19 / secret 12 / decision 11 /
+                                    field-ops 10 / release 10 / repo-code 9 / repo-doc 3 / repo-test 2 /
+                                    config 2）· summary:counts ok · RESULT: PASS
 ```
 
 新增/调整的断言：
@@ -387,7 +443,16 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
 - `tests/runner.spec.ts`：造行的 `repoPath` 改成它自己创建的临时目录（原来写死的 `D:\gitAll\demo` 不存在，
   现在会被 `repo-missing` 拦住）；`tests/engine.spec.ts`、`tests/decision-log.spec.ts`、
   `scripts/same-repo-rehearsal.ts` 造 facts 时补上 `repoExists`。
-- `tests/policy-triage-check.spec.ts`（13 例）：repo 段缺失时跳过（原 9 例保持）；新增 4 例——行行重算通过、
+- `tests/action-facts.spec.ts`（新，28 例）：每个 kind 各有真实行样本；`用户批注` 里的「代码」不能准入，
+  `简要描述` 也不能；「代码已就位，等用户拍板」判 `decision`；否定句（"不用密钥"）不判 secret；
+  英文模板句与空格子判 `unclear` 且 `reason` 指明缺什么；`alternatives` 按最严在前；
+  `latest` 里的 `test` 不算测试（ASCII 词边界）。
+- `tests/policy.spec.ts`（新增动作层 6 例）：code/test/doc 三种仓内动作放行；`action=secret` ⇒
+  `action-needs-secret`；每种非仓内 kind 各有独立理由；缺 `actionFacts` ⇒ `action-facts-unknown`；
+  `kind=repo-code` 但 `matched` 为空 ⇒ `action-unclear`（事实自相矛盾不得放行）；动作层排在仓库层之后、
+  ticket 层之前。
+- `tests/policy-triage-check.spec.ts`（16 例，原 13 例保持）：新增 3 例——每行动作类型由 Gate 自己的模块重算且
+  与文档一致；文档块与 dump 不符 ⇒ `FAIL action:counts`；有 dump 却缺块 ⇒ `FAIL action:counts`。repo 段缺失时跳过（原 9 例保持）；新增 4 例——行行重算通过、
   文档声称存在而探测不存在 ⇒ `repo:table` 失败、有表无块 ⇒ `repo:counts` 失败、tally 与 dump 不符 ⇒ `repo:tally` 失败。
 
 ## 9. 残余风险

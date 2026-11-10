@@ -38,6 +38,10 @@ export interface DirectionItem {
   collaboration: string
   /** `待审` / `已通过` / `已忽略` / `阻塞`. */
   approval: string
+  /** `用户批注` — free-form history and instructions the row's owner wrote on it. */
+  userNote: string
+  /** `贡献类型` — the source's own tag for the contribution, e.g. `功能增强` / `测试补充`. */
+  contribution: string
   /** The action waiting for a human decision, if any. */
   pendingAction: string
   /** Free-form category, e.g. `工作项目` / `兴趣研究`. */
@@ -79,6 +83,8 @@ export function normalizeItem(raw: Record<string, unknown>): DirectionItem {
     authorization: str(raw['authorization']) || '自主',
     collaboration: str(raw['collaboration']) || 'sparse',
     approval: str(raw['approval']) || '已通过',
+    userNote: str(raw['userNote']),
+    contribution: str(raw['contribution']),
     pendingAction: str(raw['pendingAction']),
     category: str(raw['category']),
   }
