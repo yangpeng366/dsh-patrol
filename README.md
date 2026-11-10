@@ -284,6 +284,25 @@ pnpm test -- same-repo                # 同一套场景的 vitest 入口（共�
 同一行结束之后再开时，第二条 Ticket 的 id 追加 `-r2`、`-r3`……；第一条 `ended` 记录留在
 `tickets()` 里，审计能看到几代工作各自的结果，而不是被新记录覆盖。
 
+## 多实例部署约束（multi-instance）
+
+Ticket 只在 `Engine` 的内存里（`ticketStore`），`ticket-already-open` 也只在这个进程内成立；
+`decisionLogPath` 是唯一的跨进程痕迹，而它只记录决定、不参与判定。所以同一套方向表**只能有一个实例**
+在跑。这不是性能建议，是正确性条件：
+
+- **一仓一实例。** 两个实例读同一张表时，各自看到的 open ticket 都是空集，于是同一行同一条方向会在
+  两个进程里各开一张票、各派发一次。闸门本身没问题，它只是看不到另一个进程。
+- **多行同仓不能按行分片。** 同一仓的两行会落到不同进程，`ticket-already-open` 同样失效；要并行就按
+  **仓**分片，让一个仓的所有行只归一个实例。
+- **重启会重开。** Trigger id 是内容寻址的，但去重表也在内存里：进程重启后未改动的行重新成为 pending，
+  于是再开一代 ticket（`-r2` 只在旧 ticket 记录还在时出现，重启后又是新的 `tkt_…`）。先 `endTicket`
+  再重启，或先用 `observe` 观察一轮再决定。
+- **审计按实例分文件。** 两个实例写同一个 `decisionLogPath` 不会把行写坏（一行一次 append），但计数会
+  混在一起；每个实例给一个自己的 JSONL，读的时候才有意义。
+
+需要多处同时跑时，用 `tasksFile`／表把一个仓的集合切给一个实例，其余实例换表或停掉。边界仍是单进程：
+上面「同仓并发演练」证明的是同一进程内两轮并发的闸门有效，不是多进程互斥。
+
 ## Running on Windows
 
 `lark-cli` installs as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot spawn by bare
@@ -405,18 +424,19 @@ if you no longer want the history. Tickets live in memory only, so a restart sta
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 69 tests
+pnpm test        # vitest run — 81 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 69 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 81 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 What the tests actually pin down: the Gate's refusals (needs-approval, read-only, approval state,
 no next step, ticket already open, paused), the v3 repo default (empty allowlist refuses, explicit
 `allowAnyRepo` is the only way back, prefix hit/miss and case/separator normalisation, the repo
 layer staying ahead of the ticket layer), Mandate re-validation across a policy change,
 `observe`/`off` holding verdicts back, duplicate-trigger idempotency, content-addressed trigger
-ids, the row interval, the Bitable column mapping, and a round that survives a failing write-back.
+ids, the row interval, the Bitable column mapping, and a round that survives a failing write-back —
+plus the host source's local-json write-back, which must keep the row's own `下一步` untouched.
 The decision log adds: one line per decision with no BOM and no truncation, a created directory, a
 blocked write that is reported rather than thrown, the empty `decisionLogPath` that writes nothing,
 and the audit script's counts, bad-line line numbers and `wouldAccept` filter (run as the real CLI).
@@ -424,9 +444,20 @@ The same-repo rehearsal adds: one open ticket per repo across five Engine-path s
 two rounds launched without an intervening `await` (the Assessor windows are asserted to overlap),
 and a repo layer that refuses every row outside the allowlist before the ticket layer runs.
 
-What is **not** verified here: running inside a live DSH host. The DSH seam is deliberately narrow —
-`DshSessionController.prompt` is declared structurally in `src/dispatch.ts` — so a DSH upgrade
-changes one file rather than the engine. The `codex` and `log` dispatchers need no DSH host at all.
+**Verified on a live host** — DSH `0.2.1-alpha.2` on Windows, 2026-11-11. The tarball was installed
+into an isolated profile (`dsh plugin --profile patrol-web add ./dsh-patrol-0.1.0.tgz`), the bundle
+patch mounted, and one `local-json` round ran with `acceptMode: auto` and `dispatcher: log`: `apply()`
+executed, the host's skill registry reported `dsh-patrol` (`source: runtime`, 1457-byte body, resource
+base inside the installed package), exactly one Ticket was opened, and the row was written back. What
+is **not** verified: the `dsh` dispatcher against a real `sessionController` (that service ships in
+`@deepseek-ai/dsh-api-session-controller`, which a 0.2.1-alpha.2 install does not carry) and the
+bundled worker preset (its `agentPresets` service is absent from the headless and web bundles, so the
+preset row stays `pending`; it holds no code this plugin needs). `sessionController` is resolved
+lazily in `createDispatcher` and deliberately **not** in `inject`: requiring it kept the whole plugin
+`pending (waiting for service: sessionController)` on that host — no round, no skill, no ticket. The
+DSH seam stays narrow — `DshSessionController.prompt` is declared structurally in `src/dispatch.ts` —
+so a DSH upgrade changes one file rather than the engine. The `codex` and `log` dispatchers need no
+DSH host at all.
 
 ## External dependencies
 
