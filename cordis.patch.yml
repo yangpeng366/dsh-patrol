@@ -1,0 +1,31 @@
+# dsh-patrol bundle layer: inserts the plugin without configuration (it needs none to be loaded)
+# and declares the agent preset its worker Sessions run under.
+#
+# Configuration (which table to read, which policy version, where work goes) is supplied by the
+# profile, not by this patch — see README.md §Configuration.
+- insert:
+    - id: dsh-patrol
+      name: dsh-patrol
+    # The agent preset of every worker Session. It is DSH's `standard` preset with only what a
+    # worker needs: the persona, the time context and a shell whose foreground command moves to
+    # a background job after 5 seconds, so a long command does not hold back a person's message.
+    - id: dsh-patrol-worker-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: dsh-patrol-worker
+        name: dsh-patrol 执行器
+        description: dsh-patrol 的执行器 Session 专用，不供手动选择。前台命令超 5 秒转入后台，只含执行工作所需的工具。
+        order: 90
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: You are a coding agent powered by the {{model}} model.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: shell
+            name: cordis:group

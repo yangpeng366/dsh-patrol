@@ -1,0 +1,224 @@
+/**
+ * The Engine: Trigger in, Ticket out.
+ *
+ * It owns the parts the prototype calls the domain: threads, dispositions, tickets, assignments.
+ * It does not own IO — sources feed it, an executor receives its assignments, and the model
+ * only ever sees bounded facts through the Assessor.
+ */
+import type { AcceptMode, Assessor, Candidate } from './eval.ts'
+import type { Assignment, Mandate, Strength, Thread, Ticket, TicketEndBy, Trigger, TriggerDisposition } from './model.ts'
+import type { Policy } from './policy.ts'
+import { itemScope } from '../mapping.ts'
+import { createHash } from 'node:crypto'
+
+/** Where a started Assignment goes. */
+export interface AssignmentSink {
+  start(ticket: Ticket, assignment: Assignment): void | Promise<void>
+}
+
+/** What the Engine decided about one Evaluation. */
+export interface DecisionRecord {
+  evalId: string
+  threadKey: string
+  triggerId: string
+  verdict: 'ignored' | 'unavailable' | 'admitted' | 'observed'
+  reason: string
+  /** Present when the verdict was an accept that was held back for review. */
+  wouldAccept?: { title: string; scope: string; rules: string[] }
+  ticketId?: string
+}
+
+/** The result of one round. */
+export interface RoundSummary {
+  evaluated: number
+  admitted: number
+  observed: number
+  ignored: number
+  unavailable: number
+  tickets: string[]
+}
+
+export interface EngineOptions {
+  policy: Policy
+  assessor: Assessor
+  /** How accepted verdicts are acted on. */
+  acceptMode?: AcceptMode
+  /** Clock, injectable for tests. */
+  now?: () => Date
+  sink?: AssignmentSink
+  onDecision?: (decision: DecisionRecord) => void
+}
+
+export class Engine {
+  private readonly triggers = new Map<string, Trigger>()
+  private readonly dispositions = new Map<string, TriggerDisposition>()
+  private readonly threads = new Map<string, Thread>()
+  private readonly ticketStore = new Map<string, Ticket>()
+  private readonly policy: Policy
+  private readonly assessor: Assessor
+  private readonly acceptMode: AcceptMode
+  private readonly now: () => Date
+  private readonly sink: AssignmentSink | undefined
+  private readonly onDecision: ((decision: DecisionRecord) => void) | undefined
+
+  constructor(options: EngineOptions) {
+    this.policy = options.policy
+    this.assessor = options.assessor
+    this.acceptMode = options.acceptMode ?? 'auto'
+    this.now = options.now ?? (() => new Date())
+    this.sink = options.sink
+    this.onDecision = options.onDecision
+  }
+
+  /** Accepts a Trigger. A Trigger already seen is a duplicate and changes nothing. */
+  receive(trigger: Trigger): boolean {
+    if (this.dispositions.has(trigger.id)) return false
+    this.triggers.set(trigger.id, trigger)
+    const thread = this.threads.get(trigger.threadKey) ?? { key: trigger.threadKey, source: trigger.source, triggerIds: [] }
+    if (!thread.triggerIds.includes(trigger.id)) thread.triggerIds.push(trigger.id)
+    this.threads.set(trigger.threadKey, thread)
+    this.dispositions.set(trigger.id, { state: 'pending' })
+    return true
+  }
+
+  /** Triggers that no Evaluation has judged yet. */
+  pending(): Trigger[] {
+    return [...this.triggers.values()].filter((trigger) => this.dispositions.get(trigger.id)?.state === 'pending')
+  }
+
+  /** Every Ticket, open or ended. */
+  tickets(): Ticket[] {
+    return [...this.ticketStore.values()]
+  }
+
+  ticket(id: string): Ticket | undefined {
+    return this.ticketStore.get(id)
+  }
+
+  /** Ends a Ticket; an ended Ticket keeps its record but takes no new work. */
+  endTicket(id: string, by: TicketEndBy, outcome: TicketEndBy = by): Ticket | undefined {
+    const ticket = this.ticketStore.get(id)
+    if (!ticket || ticket.status === 'ended') return ticket
+    ticket.status = 'ended'
+    ticket.endedAt = this.now().toISOString()
+    ticket.outcome = outcome
+    for (const assignment of ticket.assignments) {
+      if (assignment.status !== 'ended') { assignment.status = 'ended'; assignment.endedAt = ticket.endedAt }
+    }
+    return ticket
+  }
+
+  /** Runs one Evaluation round over every pending Trigger, grouped by thread. */
+  async runRound(now: Date = this.now()): Promise<RoundSummary> {
+    const summary: RoundSummary = { evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
+    const grouped = new Map<string, Trigger[]>()
+    for (const trigger of this.pending()) {
+      const bucket = grouped.get(trigger.threadKey) ?? []
+      bucket.push(trigger)
+      grouped.set(trigger.threadKey, bucket)
+    }
+
+    for (const [threadKey, triggers] of grouped) {
+      const trigger = triggers[0]!
+      const thread = this.threads.get(threadKey)!
+      const evalId = `eval_${createHash('sha1').update(triggers.map((t) => t.id).join(',')).digest('hex').slice(0, 12)}`
+
+      const gate = this.policy.gate(trigger, thread, this.tickets())
+      if (!gate.admissible) {
+        this.decide(trigger, evalId, 'ignored', gate.reason, summary)
+        continue
+      }
+
+      const candidate: Candidate = {
+        evalId,
+        thread,
+        triggers,
+        strength: gate.strength,
+        policyVersion: this.policy.version,
+        tickets: this.tickets().filter((ticket) => ticket.threadKey === threadKey),
+      }
+
+      const outcome = await this.assessor.assess(candidate)
+      if (outcome.kind === 'ignore') { this.decide(trigger, evalId, 'ignored', outcome.reason, summary); continue }
+      if (outcome.kind === 'unavailable') { this.decide(trigger, evalId, 'unavailable', outcome.reason, summary); continue }
+      if (outcome.kind === 'stop') {
+        this.endTicket(outcome.ticketId, 'person', 'dropped')
+        this.decide(trigger, evalId, 'ignored', outcome.reason, summary)
+        continue
+      }
+
+      const rules = outcome.rules ?? []
+      const held = this.holds(gate.strength, rules)
+      if (held) {
+        this.decide(trigger, evalId, 'observed', `held-by-mode:${this.acceptMode}`, summary, {
+          wouldAccept: { title: outcome.title, scope: outcome.scope, rules },
+        })
+        continue
+      }
+
+      const ticket = this.openTicket(trigger, gate.strength, gate.basis, outcome.title, outcome.scope)
+      this.decide(trigger, evalId, 'admitted', outcome.reason, summary, undefined, ticket.id)
+      summary.tickets.push(ticket.id)
+    }
+    return summary
+  }
+
+  /** Whether an accept verdict is held back for review. */
+  private holds(strength: Strength, rules: string[]): boolean {
+    if (this.acceptMode === 'off') return true
+    if (strength === 'inferred') return this.acceptMode !== 'auto' || !this.policy.admitsInferred(rules)
+    return false
+  }
+
+  private decide(
+    trigger: Trigger,
+    evalId: string,
+    verdict: DecisionRecord['verdict'],
+    reason: string,
+    summary: RoundSummary,
+    extra?: { wouldAccept?: DecisionRecord['wouldAccept'] },
+    ticketId?: string,
+  ): void {
+    this.dispositions.set(trigger.id, { state: 'evaluated', decision: verdict })
+    summary.evaluated += 1
+    if (verdict === 'admitted') summary.admitted += 1
+    else if (verdict === 'observed') summary.observed += 1
+    else if (verdict === 'unavailable') summary.unavailable += 1
+    else summary.ignored += 1
+    this.onDecision?.({ evalId, threadKey: trigger.threadKey, triggerId: trigger.id, verdict, reason, ...extra, ticketId })
+  }
+
+  private openTicket(
+    trigger: Trigger,
+    strength: Strength,
+    basis: Mandate['basis'],
+    title: string,
+    scope: string,
+  ): Ticket {
+    const id = `tkt_${createHash('sha1').update(trigger.threadKey).digest('hex').slice(0, 12)}`
+    const mandate: Mandate = { scope, strength, basis }
+    const assignment: Assignment = { id: `asg_${createHash('sha1').update(`${id}:${trigger.id}`).digest('hex').slice(0, 12)}`, ticketId: id, status: 'pending' }
+    const ticket: Ticket = {
+      id,
+      threadKey: trigger.threadKey,
+      title,
+      scope,
+      status: 'open',
+      mandate,
+      assignments: [assignment],
+      subscription: { threadKey: trigger.threadKey, dropped: false },
+      stage: String(trigger.meta['stage'] ?? '探索'),
+      createdAt: this.now().toISOString(),
+      sourceItemId: String(trigger.meta['itemId'] ?? trigger.threadKey.replace(/^patrol:/, '')),
+    }
+    this.ticketStore.set(id, ticket)
+    assignment.status = 'running'
+    assignment.startedAt = this.now().toISOString()
+    ticket.status = 'running'
+    void this.sink?.start(ticket, assignment)
+    return ticket
+  }
+}
+
+/** Scope helper re-exported for callers that only import the Engine. */
+export { itemScope }

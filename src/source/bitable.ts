@@ -1,0 +1,133 @@
+/**
+ * The `bitable` source: a Feishu Bitable table of directions.
+ *
+ * Reads through `lark-cli base --as user`, so no tenant token and no app secret is involved —
+ * the same identity path the rest of our tooling uses. The column names are the source's own
+ * (`项目名` / `下一步` / `授权边界` / ...), mapped here into the neutral item contract.
+ */
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { normalizeItem, type DirectionItem, type SourceProvider, type WriteBackField } from './provider.ts'
+
+const run = promisify(execFile)
+
+export interface BitableSourceOptions {
+  baseToken: string
+  tableId: string
+  /** Row identity for `--as user`. */
+  identity?: 'user' | 'bot'
+  /** CLI binary; defaults to `lark-cli` on PATH. */
+  larkCli?: string
+  /** Command runner; injectable so tests need no CLI. */
+  exec?: (file: string, args: string[]) => Promise<{ stdout: string }>
+}
+
+/** Column names this source understands. Missing columns degrade to empty values. */
+const COLUMNS = {
+  id: 'record_id',
+  title: '项目名',
+  description: '简要描述',
+  nextStep: '下一步',
+  priority: '优先级',
+  intervalMin: '巡检间隔(分钟)',
+  repoPath: '仓库路径',
+  threadId: 'codex_thread_id',
+  fake: '假数据模式',
+  currentStage: '当前阶段',
+  achievement: '外部成就',
+  authorization: '授权边界',
+  collaboration: '协作形态',
+  approval: '审批状态',
+  pendingAction: '待审行动',
+  category: '分类',
+  lastRun: '最近执行时间',
+} as const
+
+/** Row-shaped source backed by a Feishu Bitable table. */
+export class BitableSource implements SourceProvider {
+  readonly kind = 'bitable'
+  private readonly options: BitableSourceOptions
+  private readonly exec: (file: string, args: string[]) => Promise<{ stdout: string }>
+
+  constructor(options: BitableSourceOptions) {
+    this.options = options
+    this.exec = options.exec ?? ((file, args) => run(file, args, { maxBuffer: 64 * 1024 * 1024 }))
+  }
+
+  async listItems(signal?: AbortSignal): Promise<DirectionItem[]> {
+    signal?.throwIfAborted()
+    const args = [
+      'base', '+record-list',
+      '--as', this.options.identity ?? 'user',
+      '--base-token', this.options.baseToken,
+      '--table-id', this.options.tableId,
+      '--format', 'json',
+    ]
+    const { stdout } = await this.exec(this.options.larkCli ?? 'lark-cli', args)
+    const payload = JSON.parse(stdout) as {
+      ok?: boolean
+      data?: { data?: unknown[][]; fields?: string[] }
+      error?: unknown
+    }
+    if (payload.ok === false) throw new Error(`BitableSource: lark-cli failed: ${JSON.stringify(payload.error ?? payload)}`)
+    const rows = payload.data?.data ?? []
+    const fields = payload.data?.fields ?? []
+    return rows.map((row) => {
+      const byName: Record<string, unknown> = {}
+      fields.forEach((name, index) => { byName[name] = row[index] })
+      const record: Record<string, unknown> = {}
+      for (const [key, column] of Object.entries(COLUMNS)) {
+        const value = byName[column]
+        record[key] = Array.isArray(value) ? (value[0] ?? '') : value
+      }
+      return normalizeItem(record)
+    })
+  }
+
+  async writeBack(id: string, fields: Partial<Record<WriteBackField, string>>, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    const payload: Record<string, string> = {}
+    if (fields.currentStage !== undefined) payload['当前阶段'] = fields.currentStage
+    if (fields.nextStep !== undefined) payload['下一步'] = fields.nextStep
+    if (fields.achievement !== undefined) payload['外部成就'] = fields.achievement
+    if (fields.threadId !== undefined) payload['codex_thread_id'] = fields.threadId
+    if (Object.keys(payload).length === 0) return
+
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-patrol-'))
+    const file = join(dir, 'payload.json')
+    try {
+      await writeFile(file, JSON.stringify(payload), 'utf8')
+      await this.exec(this.options.larkCli ?? 'lark-cli', [
+        'base', '+record-upsert',
+        '--as', this.options.identity ?? 'user',
+        '--base-token', this.options.baseToken,
+        '--table-id', this.options.tableId,
+        '--record-id', id,
+        '--json', `@${file}`,
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  /** Reads one row's raw JSON, for diagnostics. */
+  async readRaw(id: string): Promise<string> {
+    const { stdout } = await this.exec(this.options.larkCli ?? 'lark-cli', [
+      'base', '+record-get',
+      '--as', this.options.identity ?? 'user',
+      '--base-token', this.options.baseToken,
+      '--table-id', this.options.tableId,
+      '--record-id', id,
+      '--format', 'json',
+    ])
+    return stdout
+  }
+}
+
+/** Reads a file written by another process; used by tests. */
+export async function readJsonFile(path: string): Promise<unknown> {
+  return JSON.parse(await readFile(path, 'utf8'))
+}
