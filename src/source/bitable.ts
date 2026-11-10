@@ -14,6 +14,21 @@ import { normalizeItem, type DirectionItem, type SourceProvider, type WriteBackF
 
 const run = promisify(execFile)
 
+/**
+ * Resolves how to run `lark-cli` on this machine.
+ *
+ * On Windows the CLI is installed as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot
+ * spawn by bare name — it has to go through `cmd.exe`. Everywhere else the plain binary works.
+ * `LARK_CLI` overrides both.
+ */
+export function resolveLarkCli(explicit?: string): { file: string; prefix: string[] } {
+  const override = explicit ?? process.env['LARK_CLI']
+  if (override) return { file: override, prefix: [] }
+  if (process.platform === 'win32') return { file: 'cmd.exe', prefix: ['/c', 'lark-cli.cmd'] }
+  return { file: 'lark-cli', prefix: [] }
+}
+
+
 export interface BitableSourceOptions {
   baseToken: string
   tableId: string
@@ -51,40 +66,54 @@ export class BitableSource implements SourceProvider {
   readonly kind = 'bitable'
   private readonly options: BitableSourceOptions
   private readonly exec: (file: string, args: string[]) => Promise<{ stdout: string }>
+  private readonly command: { file: string; prefix: string[] }
 
   constructor(options: BitableSourceOptions) {
     this.options = options
     this.exec = options.exec ?? ((file, args) => run(file, args, { maxBuffer: 64 * 1024 * 1024 }))
+    this.command = resolveLarkCli(options.larkCli)
   }
 
   async listItems(signal?: AbortSignal): Promise<DirectionItem[]> {
     signal?.throwIfAborted()
-    const args = [
-      'base', '+record-list',
-      '--as', this.options.identity ?? 'user',
-      '--base-token', this.options.baseToken,
-      '--table-id', this.options.tableId,
-      '--format', 'json',
-    ]
-    const { stdout } = await this.exec(this.options.larkCli ?? 'lark-cli', args)
-    const payload = JSON.parse(stdout) as {
-      ok?: boolean
-      data?: { data?: unknown[][]; fields?: string[] }
-      error?: unknown
-    }
-    if (payload.ok === false) throw new Error(`BitableSource: lark-cli failed: ${JSON.stringify(payload.error ?? payload)}`)
-    const rows = payload.data?.data ?? []
-    const fields = payload.data?.fields ?? []
-    return rows.map((row) => {
-      const byName: Record<string, unknown> = {}
-      fields.forEach((name, index) => { byName[name] = row[index] })
-      const record: Record<string, unknown> = {}
-      for (const [key, column] of Object.entries(COLUMNS)) {
-        const value = byName[column]
-        record[key] = Array.isArray(value) ? (value[0] ?? '') : value
+    const items: DirectionItem[] = []
+    const limit = 100
+    // `record-list` answers with a matrix plus a parallel `record_id_list`; the row id is NOT a column,
+    // so it must be read from that list. `has_more` drives paging.
+    for (let offset = 0; offset < 100 * limit; offset += limit) {
+      const args = [
+        'base', '+record-list',
+        '--as', this.options.identity ?? 'user',
+        '--base-token', this.options.baseToken,
+        '--table-id', this.options.tableId,
+        '--offset', String(offset),
+        '--limit', String(limit),
+        '--format', 'json',
+      ]
+      const { stdout } = await this.exec(this.command.file, [...this.command.prefix, ...args])
+      const payload = JSON.parse(stdout) as {
+        ok?: boolean
+        data?: { data?: unknown[][]; fields?: string[]; record_id_list?: string[]; has_more?: boolean }
+        error?: unknown
       }
-      return normalizeItem(record)
-    })
+      if (payload.ok === false) throw new Error(`BitableSource: lark-cli failed: ${JSON.stringify(payload.error ?? payload)}`)
+      const rows = payload.data?.data ?? []
+      const fields = payload.data?.fields ?? []
+      const recordIds = payload.data?.record_id_list ?? []
+      rows.forEach((row, index) => {
+        const byName: Record<string, unknown> = {}
+        fields.forEach((name, cellIndex) => { byName[name] = row[cellIndex] })
+        const record: Record<string, unknown> = {}
+        for (const [key, column] of Object.entries(COLUMNS)) {
+          const value = byName[column]
+          record[key] = Array.isArray(value) ? (value[0] ?? '') : value
+        }
+        record['id'] = recordIds[index] ?? byName['record_id'] ?? ''
+        items.push(normalizeItem(record))
+      })
+      if (!payload.data?.has_more || rows.length === 0) break
+    }
+    return items
   }
 
   async writeBack(id: string, fields: Partial<Record<WriteBackField, string>>, signal?: AbortSignal): Promise<void> {
@@ -100,7 +129,7 @@ export class BitableSource implements SourceProvider {
     const file = join(dir, 'payload.json')
     try {
       await writeFile(file, JSON.stringify(payload), 'utf8')
-      await this.exec(this.options.larkCli ?? 'lark-cli', [
+      await this.exec(this.command.file, [...this.command.prefix,
         'base', '+record-upsert',
         '--as', this.options.identity ?? 'user',
         '--base-token', this.options.baseToken,
@@ -115,7 +144,7 @@ export class BitableSource implements SourceProvider {
 
   /** Reads one row's raw JSON, for diagnostics. */
   async readRaw(id: string): Promise<string> {
-    const { stdout } = await this.exec(this.options.larkCli ?? 'lark-cli', [
+    const { stdout } = await this.exec(this.command.file, [...this.command.prefix,
       'base', '+record-get',
       '--as', this.options.identity ?? 'user',
       '--base-token', this.options.baseToken,

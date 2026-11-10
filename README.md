@@ -94,6 +94,38 @@ Then insert the bundle in your profile patch:
 **`observe` is the default on purpose.** It records what *would* have been accepted and starts
 nothing, so a table of directions can be run in shadow mode first and only then opened up.
 
+
+## Shadow run against a real table
+
+`observe` mode is meant to be run against a live table before anything is allowed to start:
+
+```bash
+export PATROL_BASE_TOKEN=<base token>
+export PATROL_TABLE_ID=<table id>
+node scripts/shadow-run.mjs
+```
+
+It reads the table, judges every row, and prints what **would** be accepted, with the reason each
+refused row was refused — then asserts that no ticket was opened. Nothing is written back and
+nothing is dispatched.
+
+Against the 78-row direction table on 2026-11-10 it reported:
+
+```
+rows read = 78
+evaluated=77 observed=68 ignored=9 admitted=0
+reasons = {"held-by-mode:observe":68,"read-only-direction":8,"needs-approval":1}
+tickets opened = 0  (observe mode must open none)
+```
+
+The nine refusals are the Gate doing its job: eight rows are `授权边界=只读` and one is `需审批`.
+
+## Running on Windows
+
+`lark-cli` installs as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot spawn by bare
+name — the Bitable source goes through `cmd.exe` on Windows and uses the plain binary elsewhere.
+Override with `LARK_CLI=/path/to/lark-cli`.
+
 ## Verification
 
 ```bash

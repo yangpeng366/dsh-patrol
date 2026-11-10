@@ -111,17 +111,11 @@ export class Engine {
   /** Runs one Evaluation round over every pending Trigger, grouped by thread. */
   async runRound(now: Date = this.now()): Promise<RoundSummary> {
     const summary: RoundSummary = { evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
-    const grouped = new Map<string, Trigger[]>()
     for (const trigger of this.pending()) {
-      const bucket = grouped.get(trigger.threadKey) ?? []
-      bucket.push(trigger)
-      grouped.set(trigger.threadKey, bucket)
-    }
-
-    for (const [threadKey, triggers] of grouped) {
-      const trigger = triggers[0]!
-      const thread = this.threads.get(threadKey)!
-      const evalId = `eval_${createHash('sha1').update(triggers.map((t) => t.id).join(',')).digest('hex').slice(0, 12)}`
+      const thread = this.threads.get(trigger.threadKey)!
+      // The Thread's whole Trigger set is the Assessment's context; every pending Trigger is judged.
+      const threadTriggers = thread.triggerIds.map((id) => this.triggers.get(id)).filter((t): t is Trigger => t !== undefined)
+      const evalId = `eval_${createHash('sha1').update(trigger.id).digest('hex').slice(0, 12)}`
 
       const gate = this.policy.gate(trigger, thread, this.tickets())
       if (!gate.admissible) {
@@ -132,10 +126,10 @@ export class Engine {
       const candidate: Candidate = {
         evalId,
         thread,
-        triggers,
+        triggers: threadTriggers,
         strength: gate.strength,
         policyVersion: this.policy.version,
-        tickets: this.tickets().filter((ticket) => ticket.threadKey === threadKey),
+        tickets: this.tickets().filter((ticket) => ticket.threadKey === trigger.threadKey),
       }
 
       const outcome = await this.assessor.assess(candidate)
@@ -163,10 +157,16 @@ export class Engine {
     return summary
   }
 
-  /** Whether an accept verdict is held back for review. */
+  /**
+   * Whether an accept verdict is held back for review.
+   *
+   * `off` and `observe` start nothing at all: `observe` records what would have been accepted and
+   * why, so a human can read the decision history before opening the gate. `auto` starts explicit
+   * work and starts inferred work only on the rules the Policy admits.
+   */
   private holds(strength: Strength, rules: string[]): boolean {
-    if (this.acceptMode === 'off') return true
-    if (strength === 'inferred') return this.acceptMode !== 'auto' || !this.policy.admitsInferred(rules)
+    if (this.acceptMode !== 'auto') return true
+    if (strength === 'inferred') return !this.policy.admitsInferred(rules)
     return false
   }
 

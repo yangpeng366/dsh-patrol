@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { BitableSource } from '../src/source/bitable.ts'
 
-/** A captured `lark-cli base +record-list --format json` payload. */
+/** A captured `lark-cli base +record-list --format json` payload. The row id is NOT a column. */
 const payload = {
   ok: true,
   data: {
-    fields: ['record_id', '项目名', '优先级', '巡检间隔(分钟)', '授权边界', '协作形态', '审批状态', '下一步', '外部成就', '当前阶段', '假数据模式'],
+    fields: ['项目名', '优先级', '巡检间隔(分钟)', '授权边界', '协作形态', '审批状态', '下一步', '外部成就', '当前阶段', '假数据模式'],
+    record_id_list: ['rec1', 'rec2'],
+    has_more: false,
     data: [
-      ['rec1', 'networkx', ['P1'], 1440, ['自主'], ['sparse'], ['已通过'], '开一个 PR', '历史成就', ['开发'], false],
-      ['rec2', 'fastjson2', ['P2'], 0, ['自主'], ['approve'], ['待审'], '', '', ['维护'], false],
+      ['networkx', ['P1'], 1440, ['自主'], ['sparse'], ['已通过'], '开一个 PR', '历史成就', ['开发'], false],
+      ['fastjson2', ['P2'], 0, ['自主'], ['approve'], ['待审'], '', '', ['维护'], false],
     ],
   },
 }
@@ -34,6 +36,51 @@ describe('BitableSource', () => {
       currentStage: '开发',
     })
     expect(items[1]).toMatchObject({ id: 'rec2', priority: 'P2', collaboration: 'approve', approval: '待审' })
+  })
+
+  it('takes the row id from record_id_list, not from a column', async () => {
+    const source = new BitableSource({
+      baseToken: 'base',
+      tableId: 'table',
+      exec: async () => ({ stdout: JSON.stringify(payload) }),
+    })
+    const items = await source.listItems()
+    expect(items.map((item) => item.id)).toEqual(['rec1', 'rec2'])
+  })
+
+  it('pages while the table reports more rows', async () => {
+    const calls: string[][] = []
+    const source = new BitableSource({
+      baseToken: 'base',
+      tableId: 'table',
+      exec: async (_file, args) => {
+        calls.push(args)
+        const offset = Number(args[args.indexOf('--offset') + 1])
+        if (offset === 0) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                fields: ['项目名'],
+                record_id_list: ['r1'],
+                has_more: true,
+                data: [['first']],
+              },
+            }),
+          }
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { fields: ['项目名'], record_id_list: ['r2'], has_more: false, data: [['second']] },
+          }),
+        }
+      },
+    })
+    const items = await source.listItems()
+    expect(items.map((item) => item.title)).toEqual(['first', 'second'])
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toContain('100')
   })
 
   it('passes the identity and table to the CLI', async () => {

@@ -73,12 +73,41 @@ describe('Engine rounds', () => {
     expect(decisions).toEqual(['observed'])
   })
 
+  it('holds an explicit verdict too in observe mode', async () => {
+    const { instance, started, decisions } = engine({ mode: 'observe' })
+    instance.receive(trigger('trg1'))
+    const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
+    expect(summary.observed).toBe(1)
+    expect(summary.admitted).toBe(0)
+    expect(started).toHaveLength(0)
+    expect(decisions).toEqual(['observed'])
+  })
+
+  it('starts explicit work in auto mode', async () => {
+    const { instance, started } = engine({ mode: 'auto' })
+    instance.receive(trigger('trg1'))
+    const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
+    expect(summary.admitted).toBe(1)
+    expect(started).toHaveLength(1)
+  })
+
   it('starts nothing at all in off mode', async () => {
     const { instance, started } = engine({ mode: 'off' })
     instance.receive(trigger('trg1'))
     const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
     expect(summary.admitted).toBe(0)
     expect(started).toHaveLength(0)
+  })
+
+  it('judges every pending trigger, not only the first of a thread', async () => {
+    const { instance, started } = engine({ mode: 'auto' })
+    instance.receive(trigger('trg1'))
+    instance.receive(trigger('trg2'))
+    const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
+    expect(summary.evaluated).toBe(2)
+    // The second trigger of the same thread finds the ticket the first one opened.
+    expect(summary.admitted).toBe(1)
+    expect(started).toHaveLength(1)
   })
 
   it('refuses a second trigger while the thread still has an open ticket', async () => {

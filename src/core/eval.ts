@@ -31,11 +31,11 @@ export interface Assessor {
 
 /** How a verdict is acted on. */
 export type AcceptMode =
-  /** Inferred verdicts are never acted on. */
+  /** Nothing starts; verdicts are recorded as ignored. */
   | 'off'
-  /** Verdicts are recorded as `would accept` but nothing starts — a reviewable decision history. */
+  /** Nothing starts; verdicts are recorded as `would accept` — a reviewable decision history. */
   | 'observe'
-  /** Verdicts start work. */
+  /** Explicit verdicts start work; inferred ones start only on the rules the Policy admits. */
   | 'auto'
 
 /**
