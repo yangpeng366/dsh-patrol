@@ -18,6 +18,8 @@ export interface AssignmentSink {
 
 /** What the Engine decided about one Evaluation. */
 export interface DecisionRecord {
+  /** Round this decision belongs to; stable across every decision of one `runRound`. */
+  roundId: string
   evalId: string
   threadKey: string
   triggerId: string
@@ -30,6 +32,8 @@ export interface DecisionRecord {
 
 /** The result of one round. */
 export interface RoundSummary {
+  /** Identifies the round; the same id is on every `DecisionRecord` the round produced. */
+  roundId: string
   evaluated: number
   admitted: number
   observed: number
@@ -60,6 +64,8 @@ export class Engine {
   private readonly now: () => Date
   private readonly sink: AssignmentSink | undefined
   private readonly onDecision: ((decision: DecisionRecord) => void) | undefined
+  /** Counts rounds, so two rounds inside the same millisecond still get distinct ids. */
+  private rounds = 0
 
   constructor(options: EngineOptions) {
     this.policy = options.policy
@@ -110,7 +116,8 @@ export class Engine {
 
   /** Runs one Evaluation round over every pending Trigger, grouped by thread. */
   async runRound(now: Date = this.now()): Promise<RoundSummary> {
-    const summary: RoundSummary = { evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
+    const roundId = this.nextRoundId(now)
+    const summary: RoundSummary = { roundId, evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
     for (const trigger of this.pending()) {
       const thread = this.threads.get(trigger.threadKey)!
       // The Thread's whole Trigger set is the Assessment's context; every pending Trigger is judged.
@@ -119,7 +126,7 @@ export class Engine {
 
       const gate = this.policy.gate(trigger, thread, this.tickets())
       if (!gate.admissible) {
-        this.decide(trigger, evalId, 'ignored', gate.reason, summary)
+        this.decide(trigger, roundId, evalId, 'ignored', gate.reason, summary)
         continue
       }
 
@@ -133,25 +140,25 @@ export class Engine {
       }
 
       const outcome = await this.assessor.assess(candidate)
-      if (outcome.kind === 'ignore') { this.decide(trigger, evalId, 'ignored', outcome.reason, summary); continue }
-      if (outcome.kind === 'unavailable') { this.decide(trigger, evalId, 'unavailable', outcome.reason, summary); continue }
+      if (outcome.kind === 'ignore') { this.decide(trigger, roundId, evalId, 'ignored', outcome.reason, summary); continue }
+      if (outcome.kind === 'unavailable') { this.decide(trigger, roundId, evalId, 'unavailable', outcome.reason, summary); continue }
       if (outcome.kind === 'stop') {
         this.endTicket(outcome.ticketId, 'person', 'dropped')
-        this.decide(trigger, evalId, 'ignored', outcome.reason, summary)
+        this.decide(trigger, roundId, evalId, 'ignored', outcome.reason, summary)
         continue
       }
 
       const rules = outcome.rules ?? []
       const held = this.holds(gate.strength, rules)
       if (held) {
-        this.decide(trigger, evalId, 'observed', `held-by-mode:${this.acceptMode}`, summary, {
+        this.decide(trigger, roundId, evalId, 'observed', `held-by-mode:${this.acceptMode}`, summary, {
           wouldAccept: { title: outcome.title, scope: outcome.scope, rules },
         })
         continue
       }
 
       const ticket = this.openTicket(trigger, gate.strength, gate.basis, outcome.title, outcome.scope)
-      this.decide(trigger, evalId, 'admitted', outcome.reason, summary, undefined, ticket.id)
+      this.decide(trigger, roundId, evalId, 'admitted', outcome.reason, summary, undefined, ticket.id)
       summary.tickets.push(ticket.id)
     }
     return summary
@@ -170,8 +177,16 @@ export class Engine {
     return false
   }
 
+  /** `rnd_<ISO basic>Z_<n>`: readable, sortable, and unique within the process. */
+  private nextRoundId(now: Date): string {
+    this.rounds += 1
+    const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+    return `rnd_${stamp}_${this.rounds}`
+  }
+
   private decide(
     trigger: Trigger,
+    roundId: string,
     evalId: string,
     verdict: DecisionRecord['verdict'],
     reason: string,
@@ -185,7 +200,7 @@ export class Engine {
     else if (verdict === 'observed') summary.observed += 1
     else if (verdict === 'unavailable') summary.unavailable += 1
     else summary.ignored += 1
-    this.onDecision?.({ evalId, threadKey: trigger.threadKey, triggerId: trigger.id, verdict, reason, ...extra, ticketId })
+    this.onDecision?.({ roundId, evalId, threadKey: trigger.threadKey, triggerId: trigger.id, verdict, reason, ...extra, ticketId })
   }
 
   private openTicket(

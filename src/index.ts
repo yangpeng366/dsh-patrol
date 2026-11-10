@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-skill'
 import { z } from 'zod'
 import { Engine, type DecisionRecord } from './core/engine.ts'
+import { DecisionLog } from './core/decision-log.ts'
 import { DirectionPolicy } from './core/policy.ts'
 import { FunctionAssessor, type Assessor } from './core/eval.ts'
 import { BitableSource } from './source/bitable.ts'
@@ -41,6 +42,11 @@ export const Config = z.object({
   paused: z.boolean().default(false),
   /** `observe` records what would have been accepted and starts nothing. */
   acceptMode: z.enum(['off', 'observe', 'auto']).default('observe'),
+  /**
+   * Append-only JSONL audit trail of every decision. Empty means "no history", which is the
+   * old behaviour exactly. A relative path resolves against the process working directory.
+   */
+  decisionLogPath: z.string().default(''),
   /** How often a round runs. */
   roundIntervalMs: z.number().int().min(1_000).default(600_000),
   /** Where admitted work goes. */
@@ -103,16 +109,40 @@ export function defaultAssessor(acceptMode: 'off' | 'observe' | 'auto'): Assesso
 }
 
 /** Builds the Engine. A host may pass its own Assessor to use model judgement. */
-export function createEngine(config: PatrolConfig, options: { assessor?: Assessor; dispatcher?: Dispatcher; onDecision?: (decision: DecisionRecord) => void } = {}): Engine {
+export function createEngine(
+  config: PatrolConfig,
+  options: {
+    assessor?: Assessor
+    dispatcher?: Dispatcher
+    onDecision?: (decision: DecisionRecord) => void
+    /** When present, every decision is also appended to this log. */
+    decisionLog?: DecisionLog
+  } = {},
+): Engine {
   const policy = new DirectionPolicy({ version: config.policyVersion, paused: config.paused })
   const dispatcher = options.dispatcher ?? new LogDispatcher()
+  const decisionLog = options.decisionLog
   return new Engine({
     policy,
     assessor: options.assessor ?? defaultAssessor(config.acceptMode),
     acceptMode: config.acceptMode,
     sink: { start: (ticket, _assignment) => { void dispatcher.dispatch(ticket, { fake: false }) } },
-    onDecision: options.onDecision,
+    onDecision: (decision) => {
+      options.onDecision?.(decision)
+      // A failed append is reported through the log's own onError callback; the patrol goes on.
+      decisionLog?.append(decision)
+    },
   })
+}
+
+/**
+ * Builds the audit log named by the configuration.
+ *
+ * Returns `undefined` when `decisionLogPath` is unset: no file, no directory, no behaviour change.
+ */
+export function createDecisionLog(config: PatrolConfig, options: { onError?: (error: Error) => void; cwd?: string } = {}): DecisionLog | undefined {
+  if (!config.decisionLogPath) return undefined
+  return new DecisionLog({ path: config.decisionLogPath, cwd: options.cwd, onError: (error) => options.onError?.(error) })
 }
 
 /** Plugin entry point. */
@@ -120,7 +150,11 @@ export async function apply(ctx: Context, rawConfig: unknown): Promise<void> {
   const config = Config.parse(rawConfig ?? {})
   const source = createSource(config)
   const dispatcher = createDispatcher(config, ctx)
-  const engine = createEngine(config, { dispatcher, onDecision: (decision) => ctx.logger.info('dsh-patrol decision %s %s (%s)', decision.verdict, decision.threadKey, decision.reason) })
+  const engine = createEngine(config, {
+    dispatcher,
+    decisionLog: createDecisionLog(config, { onError: (error) => ctx.logger.error('dsh-patrol decision log write failed: %s', String(error)) }),
+    onDecision: (decision) => ctx.logger.info('dsh-patrol decision %s %s (%s)', decision.verdict, decision.threadKey, decision.reason),
+  })
   const runner = new PatrolRunner({ source, engine, dispatcher })
 
   // Publish the packaged skill: the host's filesystem provider only scans workspaces,
@@ -160,6 +194,8 @@ export async function apply(ctx: Context, rawConfig: unknown): Promise<void> {
 }
 
 export { Engine } from './core/engine.ts'
+export { DecisionLog, resolveDecisionLogPath } from './core/decision-log.ts'
+export type { DecisionLogEntry } from './core/decision-log.ts'
 export { DirectionPolicy } from './core/policy.ts'
 export { BitableSource } from './source/bitable.ts'
 export { CodexDispatcher, DshDispatcher, LogDispatcher } from './dispatch.ts'

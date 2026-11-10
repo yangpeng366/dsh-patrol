@@ -88,6 +88,7 @@ Then insert the bundle in your profile patch:
 | `policyVersion` | `v1` | recorded on every Mandate |
 | `paused` | `false` | a paused Policy admits nothing but keeps its rules |
 | `acceptMode` | `observe` | `off` / `observe` / `auto` |
+| `decisionLogPath` | — (off) | append-only JSONL of every decision; relative paths resolve against the process working directory |
 | `roundIntervalMs` | `600000` | how often a round runs |
 | `dispatcher` | `log` | `log` / `codex` / `dsh` |
 
@@ -120,6 +121,74 @@ tickets opened = 0  (observe mode must open none)
 
 The nine refusals are the Gate doing its job: eight rows are `授权边界=只读` and one is `需审批`.
 
+## Decision audit（决策审计）
+
+A round is gone the moment it returns: without a log, what the Engine decided and why only ever
+existed in the host log. Set `decisionLogPath` and every `DecisionRecord` is also appended to a
+JSONL file — one line per decision, UTF-8 without BOM, append-only:
+
+```yaml
+- insert:
+    - id: dsh-patrol
+      name: dsh-patrol
+      config:
+        decisionLogPath: .artifacts/patrol-decisions.jsonl
+```
+
+Each line carries `ts`, `roundId`, `verdict`, `reason`, `threadKey`, `triggerId`, `evalId`,
+`ticketId` (when a Ticket was opened) and `wouldAccept` (when an accept was held back for review):
+
+```json
+{"ts":"2026-11-10T14:33:42.920Z","roundId":"rnd_20261110T010000Z_1","verdict":"observed","reason":"held-by-mode:observe","threadKey":"patrol:rec1","triggerId":"rec1","evalId":"eval_3ff45714ea4c","wouldAccept":{"title":"补齐审计脚本","scope":"D:\\gitAll\\demo","rules":["next-step-present"]}}
+```
+
+Reading it back is what turns `observe` mode into a decision:
+
+```bash
+node scripts/policy-audit.mjs --file .artifacts/patrol-decisions.jsonl          # readable summary
+node scripts/policy-audit.mjs --file .artifacts/patrol-decisions.jsonl --json   # machine-readable
+```
+
+Against a five-row round that log prints:
+
+```
+records: 5
+
+by verdict:
+  admitted     0
+  observed     2
+  ignored      2
+  unavailable  1
+
+by reason:
+      2  held-by-mode:observe
+      1  model-timeout
+      1  no-next-step
+      1  read-only-direction
+
+would-accept (held for review): 2
+  #1 2026-11-10T14:33:42.920Z patrol:rec1 verdict=observed reason=held-by-mode:observe
+      title: 补齐审计脚本
+      scope: D:\gitAll\demo
+      rules: next-step-present
+```
+
+`--json` emits the same thing as one object (`total`, `badLines`, `verdicts`, `reasons`,
+`wouldAccept`), so a digest job can gate on `wouldAccept.length` instead of grepping text.
+
+Four rules the implementation keeps:
+
+- **Path resolution.** A relative path resolves against the *process working directory* — the same
+  rule `tasksFile` follows — not against the plugin or package root. Absolute paths are used
+  verbatim, and `~` is not expanded: that is the shell's job, not a plugin's guess.
+- **No config, no file.** With `decisionLogPath` unset (the default) no log is built at all: no
+  file, no directory, and the decision callback behaves exactly as before.
+- **A failed write never stops the patrol.** `DecisionLog.append` creates a missing directory and,
+  on failure, returns `{ ok: false, error }` *and* calls the `onError` callback the host wires to
+  `dsh-patrol decision log write failed: …`. A full disk costs history, not the round.
+- **Bad lines are data.** A truncated or hand-edited line is reported with its line number and
+  skipped; the audit keeps counting and still exits 0.
+
 ## Running on Windows
 
 `lark-cli` installs as a shim (`lark-cli.cmd` / `lark-cli.ps1`), which Node cannot spawn by bare
@@ -130,16 +199,19 @@ Override with `LARK_CLI=/path/to/lark-cli`.
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 26 tests
+pnpm test        # vitest run — 47 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 26 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 47 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 What the tests actually pin down: the Gate's refusals (needs-approval, read-only, approval state,
 no next step, ticket already open, paused), Mandate re-validation across a policy change,
 `observe`/`off` holding verdicts back, duplicate-trigger idempotency, content-addressed trigger
 ids, the row interval, the Bitable column mapping, and a round that survives a failing write-back.
+The decision log adds: one line per decision with no BOM and no truncation, a created directory, a
+blocked write that is reported rather than thrown, the empty `decisionLogPath` that writes nothing,
+and the audit script's counts, bad-line line numbers and `wouldAccept` filter (run as the real CLI).
 
 What is **not** verified here: running inside a live DSH host. The DSH seam is deliberately narrow —
 `DshSessionController.prompt` is declared structurally in `src/dispatch.ts` — so a DSH upgrade
