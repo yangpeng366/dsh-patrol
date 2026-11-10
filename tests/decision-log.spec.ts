@@ -38,7 +38,7 @@ function trigger(id: string): Trigger {
       nextStep: '把下一步做完',
       repoPath: 'D:\\gitAll\\demo',
       stage: '开发',
-      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60 },
+      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath: 'D:\\gitAll\\demo', repoExists: { raw: 'D:\\gitAll\\demo', exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\demo', reason: 'repo-exists-ok', candidates: [] } },
     },
   }
 }

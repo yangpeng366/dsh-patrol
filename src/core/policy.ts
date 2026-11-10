@@ -6,6 +6,7 @@
  * Keeping the two apart is the single most transferable idea in the superagent prototype.
  */
 import type { Mandate, Strength, Thread, Ticket, Trigger } from './model.ts'
+import type { RepoExistsFact } from './repo-facts.ts'
 
 /** One comparable form for a repo path: case, separator and trailing slashes all drop. */
 function normaliseRepo(repo: string): string {
@@ -59,6 +60,16 @@ export interface DirectionFacts {
    * allowlist, including the case where no allowlist was configured at all.
    */
   repoPath?: string
+  /**
+   * What `仓库路径` denotes on disk, probed once per round by `inspectRepoPath()`.
+   *
+   * Policy v4 could only compare the cell against an allowlist prefix; it never asked whether the
+   * directory was there, so `D:\gitAll\pi-agent-cloud` (dir gone) and `E:\repos\gitAll\mpd +
+   * E:\repos\gitAll\mpd-front` (two repos in one cell) both passed the repo layer. The fact is
+   * required: a row without one is refused, on the same rule as a missing allowlist — an unstated
+   * fact is not a permission. `docs/policy-v4-triage.md` §6.1.
+   */
+  repoExists?: RepoExistsFact
 }
 
 /**
@@ -126,6 +137,8 @@ export class DirectionPolicy implements Policy {
     const repo = normaliseRepo(String(facts.repoPath ?? ''))
     const repoRefusal = this.refuseRepo(facts, repo)
     if (repoRefusal) return { admissible: false, reason: repoRefusal }
+    const existenceRefusal = this.refuseUnprovenRepo(facts)
+    if (existenceRefusal) return { admissible: false, reason: existenceRefusal }
 
     // One open Ticket per **repo**, not one per process: a direction table can hold several rows
     // that point at the same repo, and those are exactly the rows that must not become two lines
@@ -186,6 +199,27 @@ export class DirectionPolicy implements Policy {
     if (raw.startsWith('（未克隆）') || raw.startsWith('(未克隆)')) return 'repo-not-cloned'
     const inside = this.autonomousRepos.some((prefix) => repo === prefix || repo.startsWith(`${prefix}\\`))
     return inside ? undefined : 'repo-not-autonomous'
+  }
+
+  /**
+   * The existence half of the repo layer (Policy v4).
+   *
+   * `refuseRepo` answers "may this repo run unattended"; this answers "is it a repo at all". Both
+   * are needed: the allowlist is a prefix match, so a deleted directory and a cell holding two
+   * paths both satisfied v3 as long as one prefix matched.
+   *
+   * The verdict is read from `reason`, not from `exists` alone, because a path can exist and still
+   * not be the row's repo (`E:\repos\...（说明）` — one directory, plus prose that may name another
+   * target). A missing fact is refused too: the mapping fills it on every row, so its absence means
+   * the caller built the facts by hand and skipped the probe — not that the repo is fine.
+   */
+  private refuseUnprovenRepo(facts: DirectionFacts): string | undefined {
+    const fact = facts.repoExists
+    if (!fact) return 'repo-exists-unknown'
+    if (fact.reason !== 'repo-exists-ok') return fact.reason
+    // A defective fact must not pass through its own "ok": the two fields have to agree.
+    if (!fact.exists || fact.kind !== 'directory') return 'repo-not-a-directory'
+    return undefined
   }
 
   /**

@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { DirectionPolicy } from '../src/core/policy.ts'
+import type { RepoExistsFact } from '../src/core/repo-facts.ts'
 import type { Thread, Ticket, Trigger } from '../src/core/model.ts'
 
 const thread: Thread = { key: 'patrol:rec1', source: 'direction-table', triggerIds: ['trg1'] }
+
+/** The fact `itemRepoFact()` produces for a real directory; the Gate refuses a row without one. */
+function repoFact(overrides: Partial<RepoExistsFact> = {}): RepoExistsFact {
+  return {
+    raw: 'D:\\gitAll\\dsh-patrol',
+    exists: true,
+    kind: 'directory',
+    normalizedPath: 'D:\\gitAll\\dsh-patrol',
+    reason: 'repo-exists-ok',
+    candidates: [],
+    ...overrides,
+  }
+}
 
 function trigger(overrides: Record<string, unknown> = {}): Trigger {
   return {
@@ -22,6 +36,8 @@ function trigger(overrides: Record<string, unknown> = {}): Trigger {
         nextStepPresent: true,
         // A running row: `巡检间隔(分钟)` > 0. Policy v4 refuses anything without one.
         intervalMin: 60,
+        // The repo layer needs the probed cell too; `repo-exists-unknown` is a refusal.
+        repoExists: repoFact(),
       },
       ...overrides,
     },
@@ -171,6 +187,52 @@ describe('DirectionPolicy repo allowlist', () => {
     const result = policy.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, [open])
     expect(result.admissible).toBe(false)
     if (!result.admissible) expect(result.reason).toBe('ticket-already-open')
+  })
+})
+
+describe('DirectionPolicy repo-exists layer', () => {
+  // The opt-in keeps the allowlist layer out of the way, so each assertion is about the file
+  // system fact alone — the same isolation the v3 block uses for the allowlist.
+  const policy = new DirectionPolicy({ version: 'v4', allowAnyRepo: true })
+
+  it('admits only when the cell proved one reachable directory', () => {
+    expect(policy.gate(facts({ repoPath: 'D:\\gitAll\\dsh-patrol' }), thread, []).admissible).toBe(true)
+  })
+
+  it('refuses a row with no repo fact at all, because an unprobed cell is not a licence', () => {
+    const result = policy.gate(facts({ repoExists: undefined }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-exists-unknown')
+  })
+
+  it('reports the fact\'s own reason instead of collapsing every refusal into one', () => {
+    for (const [reason, fact] of [
+      ['repo-missing', repoFact({ exists: false, kind: 'missing', normalizedPath: '', reason: 'repo-missing' })],
+      ['repo-path-ambiguous', repoFact({ exists: false, kind: 'multiple', normalizedPath: '', reason: 'repo-path-ambiguous' })],
+      ['repo-empty-cell', repoFact({ exists: false, kind: 'empty', normalizedPath: '', reason: 'repo-empty-cell' })],
+      ['repo-path-unreachable', repoFact({ exists: false, kind: 'unreachable', normalizedPath: '', reason: 'repo-path-unreachable' })],
+      ['repo-not-a-directory', repoFact({ exists: true, kind: 'file', reason: 'repo-not-a-directory' })],
+      ['repo-path-relative-unresolved', repoFact({ exists: false, kind: 'unresolved', normalizedPath: '', reason: 'repo-path-relative-unresolved' })],
+    ] as const) {
+      const result = policy.gate(facts({ repoExists: fact }), thread, [])
+      expect(result.admissible).toBe(false)
+      if (!result.admissible) expect(result.reason).toBe(reason)
+    }
+  })
+
+  it('refuses a fact that says ok while its own fields say otherwise', () => {
+    const result = policy.gate(facts({ repoExists: repoFact({ exists: false, kind: 'missing' }) }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-not-a-directory')
+  })
+
+  it('runs the existence check after the allowlist and before the ticket layer', () => {
+    const allowlisted = new DirectionPolicy({ version: 'v4', autonomousRepos: ['D:\\gitAll\\dsh-patrol'] })
+    const missing = facts({ repoPath: 'D:\\gitAll\\dsh-patrol', repoExists: repoFact({ exists: false, kind: 'missing', reason: 'repo-missing' }) })
+    const open = { id: 'tkt1', status: 'open', repoPath: 'D:\\gitAll\\dsh-patrol' } as unknown as Ticket
+    const result = allowlisted.gate(missing, thread, [open])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('repo-missing')
   })
 })
 

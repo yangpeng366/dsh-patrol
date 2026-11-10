@@ -27,8 +27,26 @@ const TABLE = [
 
 const HEADER = '| # | record_id | 项目名 | scope | 当前阶段 | 巡检间隔 | 授权边界 | 最近结果 | 判定 | 判据 |'
 const RULE = '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+const REPO_HEADER = '| # | record_id | 项目名 | 仓库路径（原始单元格） | exists | kind | reason |'
+const REPO_RULE = '| --- | --- | --- | --- | --- | --- | --- |'
 
-function doc(options: { rows?: string[]; summary?: string } = {}): string {
+/** The §6.1 repo table + blocks, built from the dump's cells (both fixtures are not on disk). */
+function repoSection(options: { rows?: string[]; summary?: string; table?: boolean; tally?: string[] | null } = {}): string[] {
+  const rows = options.rows ?? [
+    '| 1 | `recRun` | 在跑的行 | `D:\\gitAll\\run` | false | missing | repo-missing |',
+    '| 2 | `recStop` | 停跑的行 | `D:\\gitAll\\stop` | false | missing | repo-missing |',
+  ]
+  const summary = options.summary ?? ['candidates=2', 'reason-repo-missing=2', 'still-auto=0'].join('\n')
+  const tally = options.tally === undefined ? ['records=2', 'reason-repo-missing=2'] : options.tally
+  return [
+    '', '## 6.1 repo-exists', '',
+    ...(options.table === false ? [] : [REPO_HEADER, REPO_RULE, ...rows]),
+    '', '```triage-repo-exists', summary, '```',
+    ...(tally === null ? [] : ['', '```triage-repo-tally', ...tally, '```']),
+  ]
+}
+
+function doc(options: { rows?: string[]; summary?: string; repo?: string[] } = {}): string {
   const rows = options.rows ?? [
     '| 1 | `recRun` | 在跑的行 | D:\\gitAll\\run | 开发 | 60 | 自主 | 成功 | **approval** | 下一步要发版 |',
     '| 2 | `recStop` | 停跑的行 | D:\\gitAll\\stop | 维护 | 0 | 自主 | （空） | **excluded** | 停跑 |',
@@ -37,7 +55,7 @@ function doc(options: { rows?: string[]; summary?: string } = {}): string {
     'total=2', 'auto=0', 'approval=1', 'read-only=0', 'excluded=1',
     'replay-v1-schedule-stopped=1', 'replay-v1-would-accept=1',
   ].join('\n')
-  return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ''].join('\n')
+  return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ...(options.repo ?? [])].join('\n')
 }
 
 function run(options: { markdown?: string; decisons?: string; table?: string } = {}): { stdout: string; status: number | null } {
@@ -136,6 +154,46 @@ describe('policy-triage-check', () => {
     const result = spawnSync(process.execPath, [script, '--doc', join(tmpdir(), 'nope-triage.md')], { encoding: 'utf8' })
     expect(result.status).toBe(2)
     expect(result.stderr).toContain('cannot read')
+  })
+
+  it('recomputes repo-exists row by row and checks its own counts', () => {
+    const result = run({ markdown: doc({ repo: repoSection() }) })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('ok   repo:table: 2/2 rows recomputed with src/core/repo-facts.ts')
+    expect(result.stdout).toContain('ok   repo:counts')
+    expect(result.stdout).toContain('ok   repo:tally')
+    expect(result.stdout).toContain('recRun  exists=false missing   repo-missing')
+  })
+
+  it('fails when the doc claims a repo where the dump says the path is not there', () => {
+    const markdown = doc({
+      repo: repoSection({
+        rows: [
+          '| 1 | `recRun` | 在跑的行 | `D:\\gitAll\\run` | true | directory | repo-exists-ok |',
+          '| 2 | `recStop` | 停跑的行 | `D:\\gitAll\\stop` | false | missing | repo-missing |',
+        ],
+        summary: ['candidates=2', 'reason-repo-exists-ok=1', 'reason-repo-missing=1', 'still-auto=1'].join('\n'),
+        tally: ['records=2', 'reason-repo-exists-ok=1', 'reason-repo-missing=1'],
+      }),
+    })
+    const result = run({ markdown })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL repo:table')
+    expect(result.stdout).toContain('recRun: exists doc true, computed false')
+  })
+
+  it('fails when the repo table has no machine-readable block (the numbers must be published)', () => {
+    const result = run({ markdown: doc({ repo: ['', REPO_HEADER, REPO_RULE, '| 1 | `recRun` | 在跑的行 | `D:\\gitAll\\run` | false | missing | repo-missing |', '| 2 | `recStop` | 停跑的行 | `D:\\gitAll\\stop` | false | missing | repo-missing |'] }) })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL repo:counts')
+    expect(result.stdout).toContain('no ```triage-repo-exists block')
+  })
+
+  it('fails when the tally block disagrees with the dump', () => {
+    const result = run({ markdown: doc({ repo: repoSection({ tally: ['records=2', 'reason-repo-missing=1'] }) }) })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL repo:tally')
+    expect(result.stdout).toContain('reason-repo-missing: doc 1, derived 2')
   })
 
   it('skips the structural checks when no table dump is given, and says so', () => {

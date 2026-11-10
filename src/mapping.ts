@@ -7,11 +7,12 @@
  */
 import { createHash } from 'node:crypto'
 import type { DirectionFacts } from './core/policy.ts'
+import { inspectRepoPath, type RepoExistsFact, type RepoInspectOptions } from './core/repo-facts.ts'
 import type { Trigger } from './core/model.ts'
 import type { DirectionItem } from './source/provider.ts'
 
 /** Hashes the fields that make a row's work different. A row that did not change produces the same id. */
-export function itemFingerprint(item: DirectionItem): string {
+export function itemFingerprint(item: DirectionItem, repoState: 'exists' | 'missing' | 'unknown' = 'unknown'): string {
   const material = [
     item.id, item.title, item.nextStep, item.currentStage, item.priority,
     item.authorization, item.collaboration, item.approval, item.pendingAction,
@@ -19,12 +20,21 @@ export function itemFingerprint(item: DirectionItem): string {
     // new Trigger, or the row that was refused as `schedule-stopped` could never be re-judged.
     item.intervalMin,
     item.repoPath, item.lastRun ?? '',
+    // Repo existence is state too (Policy v4): cloning `D:\gitAll\patrol-scaffold` after the row
+    // was refused as `repo-missing` must re-judge the row, and `receive()` dedupes by Trigger id.
+    // The parameter is explicit so `itemFingerprint()` stays a pure function of its arguments.
+    repoState,
   ].join('\u0001')
   return createHash('sha1').update(material).digest('hex').slice(0, 16)
 }
 
+/** The row's repo cell, probed once. Kept separate so a caller can inspect without building a Trigger. */
+export function itemRepoFact(item: DirectionItem, options: RepoInspectOptions = {}): RepoExistsFact {
+  return inspectRepoPath(item.repoPath, options)
+}
+
 /** The row's shape as the Gate sees it. */
-export function itemFacts(item: DirectionItem): DirectionFacts {
+export function itemFacts(item: DirectionItem, repoExists?: RepoExistsFact): DirectionFacts {
   return {
     authorization: item.authorization,
     collaboration: item.collaboration,
@@ -35,6 +45,8 @@ export function itemFacts(item: DirectionItem): DirectionFacts {
     // Structured, never derived from the prose: the Gate must not read `下一步` for keywords.
     intervalMin: item.intervalMin,
     repoPath: item.repoPath,
+    // Structured too: `仓库路径` is a cell, and "is there a repo there" is a filesystem answer.
+    repoExists,
   }
 }
 
@@ -56,8 +68,9 @@ export function itemScope(item: DirectionItem): string {
  * did not change does not re-trigger work. The Trigger carries facts only — authority is granted
  * later by the Gate and recorded in the Mandate.
  */
-export function itemToTrigger(item: DirectionItem, now: string): Trigger {
-  const fingerprint = itemFingerprint(item)
+export function itemToTrigger(item: DirectionItem, now: string, options: RepoInspectOptions = {}): Trigger {
+  const repoExists = itemRepoFact(item, options)
+  const fingerprint = itemFingerprint(item, repoExists.exists ? 'exists' : 'missing')
   return {
     id: `trg_${item.id}_${fingerprint}`,
     source: 'direction-table',
@@ -75,7 +88,8 @@ export function itemToTrigger(item: DirectionItem, now: string): Trigger {
       stage: itemStage(item),
       currentStage: item.currentStage,
       threadId: item.threadId,
-      facts: itemFacts(item),
+      facts: itemFacts(item, repoExists),
+      repoExists,
     },
   }
 }

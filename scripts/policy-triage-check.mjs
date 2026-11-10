@@ -17,7 +17,12 @@
  *      local repo cell. These are the only rules a script may apply: the rest of the 口径 reads
  *      `下一步` prose and is a human judgement recorded in the doc;
  *   4. numbers: the `triage-summary` block equals the counts derived here, including the v4 replay
- *      of both logs (what the new `schedule-stopped` layer would change).
+ *      of both logs (what the new `schedule-stopped` layer would change);
+ *   5. repo-exists: every row of the §6.1 table is recomputed from the direction-table dump by the
+ *      *same* module the Gate uses (`src/core/repo-facts.ts`), and the `triage-repo-exists` block
+ *      equals the counts that fall out of it. The 8 rows there are the ones §3 called
+ *      "恢复后 auto 候选"; the point of the check is that "real local repo" is a fact now, not a
+ *      reading of the cell.
  *
  *   node scripts/policy-triage-check.mjs
  *   node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md \
@@ -30,6 +35,15 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+// Loaded from source, not from `lib/`: this script must work on a fresh clone without a build, and
+// the point of the check is that the doc is measured with the Gate's own `inspectRepoPath`, not a
+// second implementation that could drift from it. Node >= 22.19 strips the types on import, which
+// is the same floor `package.json` engines already states.
+const repoModule = await import(new URL('../src/core/repo-facts.ts', import.meta.url).href).catch((error) => {
+  throw new Error(`cannot load src/core/repo-facts.ts (needs Node >= 22.19 type stripping): ${messageOf(error)}`)
+})
+const inspectRepoPath = repoModule.inspectRepoPath
 
 const VERDICTS = ['auto', 'approval', 'read-only', 'excluded']
 
@@ -75,7 +89,16 @@ export function parseTriageRows(markdown) {
 
 /** The `triage-summary` fenced block: one `key=number` per line, blank lines and # ignored. */
 export function parseSummaryBlock(markdown) {
-  const match = /```triage-summary\r?\n([\s\S]*?)```/.exec(markdown)
+  return parseKeyValueBlock(markdown, 'triage-summary')
+}
+
+/** The `triage-repo-exists` fenced block, same shape as `triage-summary`. */
+export function parseRepoSummaryBlock(markdown, tag = 'triage-repo-exists') {
+  return parseKeyValueBlock(markdown, tag)
+}
+
+function parseKeyValueBlock(markdown, tag) {
+  const match = new RegExp('```' + tag + '\\r?\\n([\\s\\S]*?)```').exec(markdown)
   if (!match) return null
   const summary = {}
   for (const line of match[1].split(/\r?\n/)) {
@@ -86,6 +109,43 @@ export function parseSummaryBlock(markdown) {
     summary[text.slice(0, eq).trim()] = Number(text.slice(eq + 1).trim())
   }
   return summary
+}
+
+/**
+ * The §6.1 repo-exists table: `| # | record_id | 项目名 | 仓库路径（原始单元格） | exists | kind | reason |`.
+ *
+ * Identified by its header, not by position, so the per-row 68-row table in §3 (`scope`/`判定`) is
+ * never mistaken for it. Returns null when the doc has no such table.
+ */
+export function parseRepoTable(markdown) {
+  const lines = markdown.split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = cells(lines[index])
+    if (!header || !header.includes('record_id')) continue
+    if (!header.some((name) => name.startsWith('仓库路径'))) continue
+    const column = (predicate) => header.findIndex(predicate)
+    const idAt = column((name) => name === 'record_id')
+    const existsAt = column((name) => name === 'exists')
+    const kindAt = column((name) => name === 'kind')
+    const reasonAt = column((name) => name === 'reason')
+    if (idAt < 0 || existsAt < 0 || kindAt < 0 || reasonAt < 0) return null
+    const rows = []
+    for (let line = index + 1; line < lines.length; line += 1) {
+      const parts = cells(lines[line])
+      if (!parts) break
+      if (parts.every((cell) => cell === '' || /^:?-{3,}:?$/.test(cell))) continue
+      const recordId = (parts[idAt] ?? '').replaceAll('`', '').trim()
+      if (!/^rec[A-Za-z0-9]+$/.test(recordId)) continue
+      rows.push({
+        recordId,
+        exists: (parts[existsAt] ?? '').trim() === 'true',
+        kind: (parts[kindAt] ?? '').trim(),
+        reason: (parts[reasonAt] ?? '').trim(),
+      })
+    }
+    return rows
+  }
+  return null
 }
 
 /** `[recordId, Scope]` would-accept rows of a JSONL decision log, in file order. */
@@ -126,6 +186,9 @@ export function tableFacts(text) {
       approval: cell(row['审批状态']),
       nextStep: cell(row['下一步']),
       repoPath: cell(row['仓库路径']),
+      // The untouched cell, for `inspectRepoPath()`: it does its own array/blank/annotation
+      // handling, and a cell flattened by `cell()` would lose the shape the Gate sees.
+      repoRaw: row['仓库路径'],
     })
   }
   return rows
@@ -168,6 +231,7 @@ function replayVerdict(facts) {
  */
 export function auditTriage({ markdown, decisionsText, replayText, tableText, hasTable }) {
   const checks = []
+  const report = { repo: null, tally: null }
   const record = (name, ok, detail) => checks.push({ name, ok, detail })
 
   const docRows = parseTriageRows(markdown)
@@ -244,8 +308,97 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
       derived['replay-v2-schedule-stopped'] = replaySecond.scheduleStopped
       derived['replay-v2-would-accept'] = replaySecond.wouldAccept
     }
+
+    // 5 — repo-exists: the §6.1 table, recomputed with the Gate's own module.
+    const repoRows = parseRepoTable(markdown)
+    const repoBlock = parseRepoSummaryBlock(markdown)
+    if (repoRows) {
+      const problems = []
+      const repoDerived = { candidates: repoRows.length }
+      const rows = []
+      let stillAuto = 0
+      for (const docRow of repoRows) {
+        const rowFacts = facts.get(docRow.recordId)
+        if (!rowFacts) {
+          problems.push(`${docRow.recordId}: no row in the table dump`)
+          continue
+        }
+        const fact = inspectRepoPath(rowFacts.repoRaw)
+        rows.push({
+          recordId: docRow.recordId,
+          name: rowFacts.title,
+          path: rowFacts.repoPath,
+          exists: fact.exists,
+          kind: fact.kind,
+          reason: fact.reason,
+          normalizedPath: fact.normalizedPath,
+        })
+        if (docRow.exists !== fact.exists) problems.push(`${docRow.recordId}: exists doc ${docRow.exists}, computed ${fact.exists}`)
+        if (docRow.kind !== fact.kind) problems.push(`${docRow.recordId}: kind doc ${docRow.kind}, computed ${fact.kind}`)
+        if (docRow.reason !== fact.reason) problems.push(`${docRow.recordId}: reason doc ${docRow.reason}, computed ${fact.reason}`)
+        const key = `reason-${fact.reason}`
+        repoDerived[key] = (repoDerived[key] ?? 0) + 1
+        // "恢复后仍可 auto" is the 口径 minus the schedule: 自主 + 有下一步 + a proven repo. The repo
+        // allowlist is deployment configuration and is deliberately not applied here.
+        if (fact.reason === 'repo-exists-ok' && rowFacts.authorization === '自主' && rowFacts.nextStep !== '') stillAuto += 1
+      }
+      repoDerived['still-auto'] = stillAuto
+      record(
+        'repo:table',
+        problems.length === 0,
+        problems.length === 0
+          ? `${rows.length}/${repoRows.length} rows recomputed with src/core/repo-facts.ts`
+          : problems.join(' · '),
+      )
+      const expectedRepo = repoBlock ?? {}
+      const wrongRepo = Object.entries(repoDerived)
+        .filter(([key, value]) => expectedRepo[key] !== value)
+        .map(([key, value]) => `${key}: doc ${expectedRepo[key] ?? '(absent)'}, derived ${value}`)
+      const extraRepo = Object.keys(expectedRepo).filter((key) => !(key in repoDerived))
+      record(
+        'repo:counts',
+        repoBlock !== null && wrongRepo.length === 0 && extraRepo.length === 0,
+        repoBlock === null
+          ? 'no ```triage-repo-exists block'
+          : [wrongRepo.join(' · '), extraRepo.length > 0 ? `unexpected keys: ${extraRepo.join(', ')}` : ''].filter(Boolean).join(' · ')
+            || `${repoDerived.candidates} candidates · ${Object.entries(repoDerived).filter(([key]) => key.startsWith('reason-')).map(([key, value]) => `${key.slice(7)} ${value}`).join(' · ')} · still auto ${repoDerived['still-auto']}`,
+      )
+      report.repo = { rows, counts: repoDerived }
+
+      // 5b — the §5 tally: every would-accept record in the log, same module, so the doc's
+      // "50 of 68 cells prove a repo" is measured and not recounted by hand.
+      const tally = { records: 0 }
+      let tallyOk = true
+      for (const row of decisions.rows) {
+        const rowFacts = facts.get(row.recordId)
+        if (!rowFacts) { tallyOk = false; continue }
+        const fact = inspectRepoPath(rowFacts.repoRaw)
+        tally.records += 1
+        const key = `reason-${fact.reason}`
+        tally[key] = (tally[key] ?? 0) + 1
+      }
+      const tallyBlock = parseRepoSummaryBlock(markdown, 'triage-repo-tally')
+      const expectedTally = tallyBlock ?? {}
+      const wrongTally = Object.entries(tally)
+        .filter(([key, value]) => expectedTally[key] !== value)
+        .map(([key, value]) => `${key}: doc ${expectedTally[key] ?? '(absent)'}, derived ${value}`)
+      const extraTally = Object.keys(expectedTally).filter((key) => !(key in tally))
+      record(
+        'repo:tally',
+        tallyBlock !== null && tallyOk && wrongTally.length === 0 && extraTally.length === 0,
+        tallyBlock === null
+          ? 'no ```triage-repo-tally block'
+          : [wrongTally.join(' · '), extraTally.length > 0 ? `unexpected keys: ${extraTally.join(', ')}` : '', tallyOk ? '' : 'some would-accept records have no row in the dump'].filter(Boolean).join(' · ')
+            || `${tally.records} records · ${Object.entries(tally).filter(([key]) => key.startsWith('reason-')).map(([key, value]) => `${key.slice(7)} ${value}`).join(' · ')}`,
+      )
+      report.tally = tally
+    } else if (repoBlock !== null) {
+      record('repo:table', false, 'the ```triage-repo-exists block has no matching §6.1 table')
+    }
   } else {
     record('table:structure', true, 'skipped: no --table dump, so only coverage, vocabulary and the counts were checked')
+    record('repo:table', true, 'skipped: no --table dump, so repo-exists was not recomputed')
+    record('repo:tally', true, 'skipped: no --table dump, so the §5 tally was not recomputed')
   }
 
   // 4 — the published numbers, compared key by key against what the doc's own rows say.
@@ -264,7 +417,7 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
         || `total ${derived.total} · auto ${counts.auto} · approval ${counts.approval} · read-only ${counts['read-only']} · excluded ${counts.excluded}`,
   )
 
-  return { ok: checks.every((check) => check.ok), checks, counts: derived, summary: summaryBlock }
+  return { ok: checks.every((check) => check.ok), checks, counts: derived, summary: summaryBlock, repo: report.repo, tally: report.tally }
 }
 
 function readOrNull(path) {
@@ -351,6 +504,12 @@ function main(argv) {
   } else {
     const lines = [`triage: ${options.doc}`]
     for (const check of report.checks) lines.push(`  ${check.ok ? 'ok  ' : 'FAIL'} ${check.name}: ${check.detail}`)
+    if (report.repo) {
+      lines.push('', '  repo-exists (recomputed from the dump):')
+      for (const row of report.repo.rows) {
+        lines.push(`    ${row.recordId}  exists=${String(row.exists).padEnd(5)} ${row.kind.padEnd(9)} ${row.reason.padEnd(22)} ${row.path || '(空)'}`)
+      }
+    }
     if (tableText === null && options.table === '') lines.push('  note: pass --table <dump.ndjson> to re-check the structured verdicts')
     lines.push('', report.ok ? 'RESULT: PASS' : 'RESULT: FAIL')
     process.stdout.write(`${lines.join('\n')}\n`)

@@ -8,7 +8,7 @@ import { LogDispatcher } from '../src/dispatch.ts'
 import { PatrolRunner } from '../src/runner.ts'
 import { LocalJsonFileSource, LocalJsonSource } from '../src/source/local-json.ts'
 
-async function fixture(): Promise<string> {
+async function fixture(): Promise<{ file: string; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-patrol-test-'))
   const file = join(dir, 'tasks.json')
   await writeFile(file, JSON.stringify([
@@ -17,20 +17,22 @@ async function fixture(): Promise<string> {
     // real one; `lastRun: null` is what makes it due on the first round.
       id: 'rec-due', title: '到期方向', nextStep: '做掉它', priority: 'P0', intervalMin: 60,
       authorization: '自主', collaboration: 'sparse', approval: '已通过', currentStage: '开发',
-      lastRun: null, repoPath: 'D:\\gitAll\\demo',
+      // Policy v4 also reads the repo cell: a row pointing at a directory that is not there is
+      // refused as `repo-missing`, so the fixture points at the temp directory it just created.
+      lastRun: null, repoPath: dir,
     },
     {
       id: 'rec-fresh', title: '刚跑过', nextStep: '再看看', priority: 'P2', intervalMin: 1440,
       authorization: '自主', collaboration: 'sparse', approval: '已通过', currentStage: '维护',
-      lastRun: '2026-11-10T00:30:00.000Z', repoPath: 'D:\\gitAll\\demo2',
+      lastRun: '2026-11-10T00:30:00.000Z', repoPath: join(dir, 'sibling'),
     },
   ]), 'utf8')
-  return file
+  return { file, dir }
 }
 
 describe('PatrolRunner', () => {
   it('dispatches only the due row and survives a failing write-back', async () => {
-    const file = await fixture()
+    const { file } = await fixture()
     const source = new LocalJsonSource({ path: file })
     const dispatcher = new LogDispatcher()
     const engine = new Engine({
@@ -57,7 +59,7 @@ describe('PatrolRunner', () => {
   })
 
   it('does nothing on a second round when the row did not change', async () => {
-    const file = await fixture()
+    const { file } = await fixture()
     const source = new LocalJsonSource({ path: file })
     const dispatcher = new LogDispatcher()
     const engine = new Engine({
@@ -74,7 +76,7 @@ describe('PatrolRunner', () => {
   })
 
   it('writes the stage and the achievement back without touching the row\'s own next step', async () => {
-    const file = await fixture()
+    const { file } = await fixture()
     const source = new LocalJsonFileSource({ path: file })
     const writeBackErrors: string[] = []
     const engine = new Engine({

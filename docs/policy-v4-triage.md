@@ -32,7 +32,7 @@ would-accept 已经是 16。本文按 **68 条那份**逐条定性（它才是�
 | 1 | `excluded` | `巡检间隔(分钟)` 为 0 或空（停跑），或 `下一步` 为空 | `schedule-stopped`（v4 新增）/ `no-next-step` |
 | 2 | `read-only` | `授权边界`=只读，或 `当前阶段`=维护且下一步只是复核/观察 | `read-only-direction`；观察类目前无结构化字段（§7） |
 | 3 | `approval` | `授权边界`=需审批，或下一步涉及现场部署/发布/密钥/生产配置/用户拍板 | `needs-approval`；其余靠行级字段（§7） |
-| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `next-step-present`；缺 `repo-exists` 与动作类型（§7） |
+| 4 | `auto` | `授权边界`=自主，且 `仓库路径` 是真实存在的本地仓，且下一步是仓内可验证的代码/测试/文档改动 | 仓库白名单 + `repo-exists`（同一 v4 内补齐，§6.1）+ `next-step-present`；仍缺动作类型（§7） |
 
 「巡检间隔 0 = 停跑」不是本文的推断，是这张表自己的约定。`巡检占用` 列在三条行上把它写成了字：
 
@@ -68,7 +68,7 @@ would-accept 已经是 16。本文按 **68 条那份**逐条定性（它才是�
 | 6 | `recvsp1tyH4U3m` | 代码自动巡检/监听器 | D:\gitAll\auto-deploy | 维护 | 0 | 自主 | （空） | **excluded** | 停跑；恢复后 auto 候选：下一步是巡检写回重试契约与统一健康板，仓内代码可本地验证。 |
 | 7 | `recvsp1tyH5vPi` | CCX 环境 | 02_部署运维/ccx配置与排查指南.md | 维护 | 0 | 自主 | （空） | **excluded** | 停跑；仓库字段是 md 文档而非仓，恢复后只能 read-only（跑健康快照脚本并观察）。 |
 | 8 | `recvsrhBJOxQzB` | OpenClaw / opencode 服务化集成 | （空） | 维护 | 0 | 自主 | （空） | **excluded** | 停跑且仓库路径为空；恢复后 approval：下一步要求先人工复核已保存的 Codex 输出。 |
-| 9 | `recvsHOAmvVKKN` | dsh探索/贡献 | （空） | 维护 | 0 | 自主 | （空） | **excluded** | 停跑且仓库路径为空；恢复后 auto 候选（须先补仓库路径）：下一步是接 dsh dispatcher 并对照官方 discussion。 |
+| 9 | `recvsHOAmvVKKN` | dsh探索/贡献 | （空） | 维护 | 0 | 自主 | （空） | **excluded** | 停跑且仓库路径为空；恢复后也不足 auto：`仓库路径` 空（`repo-empty-cell`，§6.1），须先补路径。 |
 | 10 | `recvtcIOa5kYqH` | 宇宙学闭环 | D:\BaiduSyncdisk\Obsidian Vault\当前项目\02_项目推进\宇宙学接口化闭环研究.md | 维护 | 0 | 自主 | （空） | **excluded** | 停跑；仓库字段是 vault 内的 md，恢复后 approval（先人工复核已保存输出）。 |
 | 11 | `recvtcJ9QFAFdD` | dsh插件调研 | D:\gitAll\dsh-superagent-prototype（DSH 本体未克隆；上游 https://github.com/deepseek-ai/deepseek-harness） | 维护 | 0 | 自主 | 成功 | **excluded** | 停跑；下一步是「收口后仅条件更新」，恢复后 read-only。 |
 | 12 | `recvtcJp44yxWN` | dsh升级/插件规划 | D:\gitAll\dsh-superagent-prototype（DSH 本体未克隆；上游 https://github.com/deepseek-ai/deepseek-harness） | 维护 | 0 | 自主 | 成功 | **excluded** | 停跑；仓库标注未克隆且无实仓，恢复后 approval：下一步含 push 与约束脚本推进。 |
@@ -141,8 +141,12 @@ excluded   56
 
 `excluded` 的 56 条全部是「停跑」这一条命中的：44 条 `巡检间隔=0`、12 条为空；
 没有任何一条是因为 `下一步` 为空（那条 `no-next-step` 的行 `reczz28SKnliHK45` 在日志里本来就被拒了，不在 68 条里）。
-按「恢复巡检之后」再看这 56 条：**8 条可达 auto**（判据里写明「恢复后 auto 候选」）、33 条仍属 approval、
-13 条为 read-only、2 条要先修字段（`recvriLOrY7RIA` 授权已转只读、`recvsoUROVsJw4` 仓库单元格混写）。
+按「恢复巡检之后」再看这 56 条：**7 条可达 auto**（判据里写明「恢复后 auto 候选」，且在 §6.1 里过了 `repo-exists`）、
+33 条仍属 approval、13 条为 read-only、3 条要先修字段（`recvriLOrY7RIA` 授权已转只读、`recvsoUROVsJw4`
+仓库单元格混写、`recvsHOAmvVKKN` 仓库为空）。7 + 33 + 13 + 3 = 56。
+
+原来的 8 条 auto 候选里，`recvsHOAmvVKKN` 的 `仓库路径` 是空单元格，`repo-exists` 把它从候选里划掉：
+「恢复后可达 auto」从 8 条降到 **7 条**，不是判据变严，而是终于有事实能证明这件事。
 
 这 12 条非 excluded 的行就是全部「在跑的」行，也是 v4 下唯一还会进入 Assessment 的 12 条：
 `recvrXCvTCZZnv`、`recvuOzY5dp9MR`、`recvvQoJfFH1dY`、`recvwuSTYb28w0`、`reczz28QOfrbeaIn`、
@@ -201,17 +205,44 @@ replay-v2-would-accept=4
 除这两条外，其余 66 条的 `title` 与 `scope` 与当前表一致，没有「日志里有、表里没有」的行，
 也没有「表里有、日志没判过」的行。
 
-顺带记一笔**结构性问题**（不是不一致，是字段质量）：68 条里 8 条 `仓库路径` 为空、1 条带「（未克隆）」标记、
-还有 9 条的单元格不是可直接探测的目录 ——
+顺带记一笔**结构性问题**（不是不一致，是字段质量）。这一段不再手数：`inspectRepoPath()` 对 68 条逐格重读一次，
+结果如下（§6.1 有同一模块对 8 条候选的明细）：
 
-- 路径后接注释（本机其实有该目录，探测却失败）：`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN`
-- 两个仓相加：`reczz28QlJEjtOYY`（`E:\repos\gitAll\mpd + E:\repos\gitAll\mpd-front`）
-- 指向 md 文件或 vault 目录而非代码仓：`recvsp1tyH5vPi`、`recvtcIOa5kYqH`、`recvuwiIQze18J`、`reczz28QOfrbeaIn`、`reczz28QkmRdCFEv`
+| 结论 | 条数 | 是哪几条 |
+| --- | --- | --- |
+| `repo-exists-ok`（一个可达目录） | 50 | — |
+| `repo-empty-cell`（单元格为空） | 8 | `recvsrhBJOxQzB`、`recvsHOAmvVKKN`、`recvu7wY55xF0d`、`recvuwUETuVUFP`、`recvuAVEyLRBrl`、`recvuHteD72BrV`、`recvuHteD7SE4V`、`reczz28TUTVTEBux` |
+| `repo-path-ambiguous`（一格多义） | 4 | 路径后接注释：`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN`；两仓相加：`reczz28QlJEjtOYY` |
+| `repo-missing`（目录已不在） | 3 | `recvriLOrY7RIA`、`recvtR2SwGbGXn`、`recvwtYIV3rvD1` |
+| `repo-path-relative-unresolved`（相对路径，无基准） | 1 | `recvsp1tyH5vPi` |
+| `repo-not-a-directory`（是文件） | 1 | `recvtcIOa5kYqH` |
+| `repo-not-cloned`（单元格自带未克隆标记） | 1 | `recvwuSTYb28w0` |
+
+```triage-repo-tally
+records=68
+reason-repo-exists-ok=50
+reason-repo-empty-cell=8
+reason-repo-path-ambiguous=4
+reason-repo-missing=3
+reason-repo-path-relative-unresolved=1
+reason-repo-not-a-directory=1
+reason-repo-not-cloned=1
+```
+
+三处要分开看，它们以前被同一句「不可探测」混在一起：
+
+1. **混写不是不存在**。`recvsoUROVsJw4`、`recvtcJ9QFAFdD`、`recvtcJp44yxWN` 指向的目录其实在盘上，
+   是同一格里又跟了「（DSH 本体未克隆；上游 …）」。旧口径说「探测失败」，新事实说「目录在，但这格同时说了别的」
+   （`repo-path-ambiguous`，`candidates[0].annotation` 保留原话）。
+2. **vault 目录是目录**。`recvuwiIQze18J`、`reczz28QOfrbeaIn`、`reczz28QkmRdCFEv` 指向 Obsidian vault，
+   存在性事实为真（`repo-exists-ok`）；它们不是**代码仓**，那件事 `repo-exists` 证明不了，仍归白名单与动作类型。
+3. **「不在盘上」有三条**。`recvwtYIV3rvD1`（`pi-agent-cloud`）在 §3 里已是停跑，`recvriLOrY7RIA`（fastjson2）
+   与 `recvtR2SwGbGXn`（Video Battle Yuri）同样。停跑既已拦住它们，`repo-missing` 是恢复巡检后的第二道。
 
 这就是 §7 里「仓库路径需要一个纯路径列」的由来：`auto` 的最后一道判据是「真实存在的本地仓」，
-而 Gate 目前没有这个事实。
+`repo-exists` 现在能回答「这一格是不是一个可达目录」，但回答不了「是不是这一格的仓」。
 
-## 6. 代码落点：只加了一条规则，其余是复用
+## 6. 代码落点：两条事实 + 一层仓库判定，其余复用
 
 | §2 判定 | 由谁决定 | 状态 |
 | --- | --- | --- |
@@ -221,7 +252,7 @@ replay-v2-would-accept=4
 | `read-only`（维护 + 只复核/观察） | 需要结构化「动作类型」，见 §7 | 未落码 |
 | `approval`（`授权边界`=需审批） | `needs-approval` | v3 已有 |
 | `approval`（现场/发布/密钥/生产配置/拍板） | 需要结构化「动作类型」，见 §7 | 未落码 |
-| `auto` | 仓库白名单 + `next-step-present`；缺 `repo-exists`，见 §7 | 部分 |
+| `auto` | 仓库白名单 + `repo-exists` + `next-step-present`；仍缺动作类型，见 §7 | 部分（`repo-exists` 已在同一 v4 内补齐，§6.1） |
 
 具体改动（`src/`）：
 
@@ -229,7 +260,7 @@ replay-v2-would-accept=4
    `0` 与空都归一成 `0`（`normalizeItem()` 原本就这么折），Gate 只看「是否为正数」。
 2. `DirectionPolicy.gate()` 新增第一道行级拒绝：
    ```
-   paused → no-direction-facts → schedule-stopped → 审批状态 → 授权边界 → 下一步 → 仓库层 → ticket 层
+   paused → no-direction-facts → schedule-stopped → 审批状态 → 授权边界 → 下一步 → 仓库层（白名单 → 存在性）→ ticket 层
    ```
    `schedule-stopped` 排在审批/授权之前，是因为「为什么这行没动」只有一个第一答案：它停跑了。
    这也让 §4 的 `excluded` 计数与重放里 `schedule-stopped` 的计数逐条相等。
@@ -241,15 +272,77 @@ replay-v2-would-accept=4
    理由：这 68 条里 `auto` 是 0 条，没有任何一组规则名够格被「自主接受」；v4 只收紧，不放宽。
 5. `acceptMode` 默认仍是 `observe`，**没有切成 auto**。本文证明的是「谁会进 Assessment」，
    不证明「进了之后会安全执行」。
+6. `src/core/repo-facts.ts`（新）+ `DirectionFacts.repoExists`：`仓库路径` 单元格由 `inspectRepoPath()`
+   读成 `exists / kind / normalizedPath / reason / candidates`，挂到事实里。Gate 在仓库层的白名单之后
+   读它：`reason !== 'repo-exists-ok'` 就拒，reason 原样进决策日志（`repo-missing`、`repo-path-ambiguous`、
+   `repo-empty-cell`、`repo-path-unreachable`、`repo-not-a-directory`、`repo-not-local-path`、
+   `repo-not-cloned`、`repo-path-relative-unresolved`）；事实缺失报 `repo-exists-unknown`，与
+   `repo-allowlist-unset` 同一条理由——没写下的不算是许可。
+7. `itemFingerprint()` 纳入「仓库是否存在」（`exists` / `missing`）：否则把仓克隆下来之后，
+   `receive()` 会把重新判定当成重复事件，一次 `repo-missing` 永远无法变成通过。
 
-策略本身没有变聪明：它没有去读 `下一步` 的自然语言。停跑、只读、需审批、无下一步、仓库白名单
-都是结构化字段；剩下的三件事（现场/发布/密钥/拍板、仓内可验证改动、实仓存在性）如实写进 §7。
+策略本身没有变聪明：它没有去读 `下一步` 的自然语言。停跑、只读、需审批、无下一步、仓库白名单、
+仓库是否存在都是结构化字段；剩下的两件事（现场/发布/密钥/拍板、仓内可验证改动）如实写进 §7，
+实仓存在性已落成 `repoExists`，下一节是它的口径与实测。
+
+### 6.1 `repo-exists`：口径、代码与 8 条候选的实测
+
+`src/core/repo-facts.ts` 把 `仓库路径` 的**原始单元格**读成一个事实：
+
+| 字段 | 含义 |
+| --- | --- |
+| `exists` | 单元格指向的那一个路径在盘上是否存在（文件也算存在，`kind` 说明是什么） |
+| `kind` | `directory` / `file` / `other` / `missing` / `unreachable` / `empty` / `multiple` / `url` / `unresolved` |
+| `normalizedPath` | 绝对化、规范化后的路径（盘符大写、分隔符统一、去尾部分隔符）；无单一指向时为 `''` |
+| `reason` | Gate 直接当拒绝理由用；只有 `repo-exists-ok` 是通过值 |
+| `candidates` | 每个路径片段的 `path / kind / exists / annotation`，供审计 |
+
+fail-closed 的边界，逐条写成代码而不是猜：
+
+- **多行、分号（`;`/`；`）、顿号（`、`）、空格式 ` + `** 切开后仍多于一个不同路径 ⇒ `repo-path-ambiguous`；同一路径写两次不算歧义。
+  分隔符在括号内不生效，所以 `（DSH 本体未克隆；上游 …）` 不会被切成两个候选。
+- **带说明文字**：路径后跟 `（`、`；`、`：`、`,` 等 ⇒ `repo-path-ambiguous`，但 `exists/kind/normalizedPath`
+  照实报告那条路径（“目录在，只是这一格还说了别的”）。
+- **相对路径**：没有基准目录就 `repo-path-relative-unresolved`，绝不把 `02_部署运维/…` 猜成巡检进程的 cwd。
+- **文件而非目录**：`exists: true` + `repo-not-a-directory`，两者不混淆。
+- **不可达**（断开的 `E:`、`EPERM` 等）与**不存在**分开：`repo-path-unreachable` vs `repo-missing`。
+
+8 条「恢复后 auto 候选」的实测（同一模块、同一份表，由 `scripts/policy-triage-check.mjs` 重算）：
+
+| # | record_id | 项目名 | 仓库路径（原始单元格） | exists | kind | reason |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `recvsp1tyH4U3m` | 代码自动巡检/监听器 | `D:\gitAll\auto-deploy` | true | directory | repo-exists-ok |
+| 2 | `recvsHOAmvVKKN` | dsh探索/贡献 | （空） | false | empty | repo-empty-cell |
+| 3 | `recvuBBWTwOEQH` | sichuanfocusapp-mutilmedia-article | `D:\gitAll\articleeditor-tmp\sichuanfocusapp-mutilmedia-article` | true | directory | repo-exists-ok |
+| 4 | `recvuIj52aeBBU` | articleeditor 推送前正文表达式支持 | `D:\gitAll\articleeditor-tmp` | true | directory | repo-exists-ok |
+| 5 | `recvv0TxKLm7gh` | patrol-scaffold 开源脚手架 | `D:\gitAll\patrol-scaffold` | true | directory | repo-exists-ok |
+| 6 | `reczz28NeYXnjL5p` | （BTV 定制）ARTC 业务消息总线扩展 | `E:\repos\gitAll\articleeditor-tmp` | true | directory | repo-exists-ok |
+| 7 | `reczz28RzGKBlSEf` | OpenEyes 质量门禁与价值驱动 | `E:\gitAll\openeyes` | true | directory | repo-exists-ok |
+| 8 | `reczz28XYTeBuq2R` | 多媒体-版面审核权限 | `E:\repos\gitAll\articleeditor-tmp` | true | directory | repo-exists-ok |
+
+```triage-repo-exists
+candidates=8
+reason-repo-exists-ok=7
+reason-repo-empty-cell=1
+still-auto=7
+```
+
+结论三句：
+
+1. **8 → 7**。唯一没过的 `recvsHOAmvVKKN` 是空单元格（`repo-empty-cell`）：不是路径写错，是根本没写。
+   补上路径之前它进不了 auto，也不能靠「须先补仓库路径」这种注释放行。
+2. **过的 7 条只是过了仓库层**。`still-auto` 用的是 §2 第 4 条里可结构化的部分（自主 + 有下一步 +
+   一个可达目录），**不含**部署侧的 `autonomousRepos` 覆盖，也不含「下一步是不是仓内可验证改动」。
+   所以它不等于「7 条 auto」，只是「7 条不再因为仓库不存在被拒」。
+3. **证明得了存在，证明不了归属**。`E:\repos\gitAll\articleeditor-tmp` 是目录，但不是「这两行的仓」：
+   8 条候选里 `reczz28NeYXnjL5p` 与 `reczz28XYTeBuq2R` 指向同一个路径，更早的行里还有十几条也指向它。
+   归属仍是人的事，`repo-exists` 只把「路径写没写、在不在」变成事实。
 
 ## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
 
 | 缺的事实 | 谁产 | 用在哪 | 不补的后果 |
 | --- | --- | --- | --- |
-| `repoExists`（存在且是目录，且不是 md/vault） | Source/runner 读表时探测一次，写进 `DirectionFacts` | `auto` 的「真实存在的本地仓」 | 现有替代只有白名单前缀与「（未克隆）」标记；9/68 的单元格连探测都做不了 |
+| `repoExists`（存在且是目录） | **已落地**：`inspectRepoPath()`，`itemToTrigger()` 每轮探测一次，写进 `DirectionFacts`（§6.1） | `auto` 的「真实存在的本地仓」 | 已补齐；它只证明「这一格是一个可达目录」，不证明「是 git 仓 / 是本行的仓」（§9.4） |
 | 动作类型（代码/测试/文档 vs 现场/发布/密钥/配置/拍板） | 方向表新增结构化列，或 Assessment 产出可审计的 `rules` | `read-only` 的后半句、`approval` 的第二种 | 只能人读 `下一步` 判断；Gate 不许做关键词猜测 |
 | 纯路径列（与注释分开） | 方向表 | 同上 | 「路径 + 注释」混写让存在性探测误判（3 条样本） |
 | 「观察」标记 | 方向表 | `read-only`（维护 + 只复核） | 口径第 2 条后半句无法结构化，只能人判 |
@@ -258,31 +351,44 @@ replay-v2-would-accept=4
 在这些事实到位之前，`auto` 只能由人工逐行确认 —— 这也正是 v4 之后 `auto` 仍为 0 的直接原因，
 不是「没有可自主的工作」，而是「可自主这件事还不能只靠现有字段证明」。
 
+`repo-exists` 已经不在上表里：它在同一 v4 内补齐（§6.1），于是 §2 第 4 条的两个前提只剩
+「下一步是仓内可验证的改动」仍然不可结构化。`acceptMode` 仍是 `observe`，`auto` 仍是 0。
+
 ## 8. 验证
 
 ```
 pnpm typecheck                      clean
-pnpm test                           13 files / 96 tests passed
+pnpm test                           14 files / 128 tests passed
 pnpm build                          ok
+node scripts/release-check.mjs      RESULT: PASS（8/8 必需文件、无禁入内容、解包 CLI 自检、版本一致）
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl --json
                                     total 78, observed 68, ignored 10, wouldAccept 68
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110-v2.jsonl --json
                                     total 78, observed 16, ignored 62, wouldAccept 16
 node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NBY5_20261111_060500_289.ndjson
                                     table:coverage 68/68 · table:verdicts ok · table:structure ok ·
-                                    summary:counts ok（含 replay 56/12 与 12/4）· RESULT: PASS
+                                    repo:table 8/8 · repo:counts 8 candidates / 7 ok / 1 empty / still auto 7 ·
+                                    repo:tally 68 records（50 ok / 8 empty / 4 ambiguous / 3 missing /
+                                    1 relative / 1 file / 1 not-cloned）· summary:counts ok · RESULT: PASS
 ```
 
 新增/调整的断言：
 
-- `tests/policy.spec.ts`：`巡检间隔=0` ⇒ `schedule-stopped`（反例）；缺 `intervalMin` ⇒ `schedule-stopped`（缺事实不放开）；
-  同一行改回正数即放行（停跑→恢复）；停跑行即使同时是 `阻塞`/`只读`/无下一步，也只报 `schedule-stopped`（顺序）。
-- `tests/mapping.spec.ts`：`facts` 带 `intervalMin`；停跑→恢复指纹不同（否则恢复后仍被判为重复事件）；
-  `itemIsDue` 对 0 仍放行（准入归 Gate，见 §9）。
-- `tests/runner.spec.ts`、`tests/engine.spec.ts`、`tests/decision-log.spec.ts`、`scripts/same-repo-rehearsal.ts`：
-  造行时补上真实间隔，不再依赖「0 = 每轮」。
-- `tests/config.spec.ts`：默认 `policyVersion` 变成 `v4`。
-- `tests/policy-triage-check.spec.ts`：本文的检查器本身的正反用例（缺行、词表错、结构判定与文档冲突、计数不符）。
+- `tests/repo-facts.spec.ts`（新，19 例）：目录 / 正斜杠与尾分隔符 / UNC / POSIX / 数组单元格 / 同一路径写两次 ⇒
+  `repo-exists-ok`；空、`null`、全空白、空数组、两个仓相加、换行两路径、路径后接注释 ⇒ 各自 reason；
+  `（未克隆）https://…` 不探测就拒；相对路径无基准 ⇒ `repo-path-relative-unresolved`，给基准则解析并探测；
+  文件 / `other` ⇒ `repo-not-a-directory`；缺路径 ⇒ `repo-missing`；`EPERM` ⇒ `repo-path-unreachable`；
+  真实临时目录、目录里的文件、不存在的路径三例走默认 `statSync`。
+- `tests/policy.spec.ts`：只在一个可达目录上放行；缺事实 ⇒ `repo-exists-unknown`；六种 reason 原样透传；
+  `reason=ok` 但 `exists=false` 仍被拒（事实自相矛盾不得放行）；存在性在 ticket 层之前（`repo-missing` 优先于
+  `ticket-already-open`）。原有用例的 facts 补上 `repoExists`，不再依赖“没有事实也放行”。
+- `tests/mapping.spec.ts`：`facts.repoExists` 来自探测而非路径形状；空单元格 ⇒ `repo-empty-cell`；
+  `baseDir` + 注入 probe 的路径按预期拼出；仓库从无到有 ⇒ 指纹不同。
+- `tests/runner.spec.ts`：造行的 `repoPath` 改成它自己创建的临时目录（原来写死的 `D:\gitAll\demo` 不存在，
+  现在会被 `repo-missing` 拦住）；`tests/engine.spec.ts`、`tests/decision-log.spec.ts`、
+  `scripts/same-repo-rehearsal.ts` 造 facts 时补上 `repoExists`。
+- `tests/policy-triage-check.spec.ts`（13 例）：repo 段缺失时跳过（原 9 例保持）；新增 4 例——行行重算通过、
+  文档声称存在而探测不存在 ⇒ `repo:table` 失败、有表无块 ⇒ `repo:counts` 失败、tally 与 dump 不符 ⇒ `repo:tally` 失败。
 
 ## 9. 残余风险
 
@@ -293,11 +399,21 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
    行内容再变就得重跑 §3 表与 §4 计数。
 3. **`intervalMin` 进指纹** = 升级后第一次轮次会给所有行算新 Trigger id（旧 id 不复用），
    `observe` 下表现为「全部行重判一次」。这是有意的：否则恢复巡检的行永远进不来。
-4. **仓库路径质量**：18/68 的单元格不是可直接探测的目录（§5）。在 `repo-exists` 落地前，
-   auto 的「实仓」判据只能靠白名单前缀 + 人工复核，`pi-agent-cloud` 这种「目录已经不在了」的行也拦不住。
+4. **仓库路径质量**：68 条里只有 50 条的单元格读成了 `repo-exists-ok`（§5）。其余 18 条现在会被
+   Gate 逐条拒（`repo-empty-cell` 8 / `repo-path-ambiguous` 4 / `repo-missing` 3 / 相对路径 1 / 文件 1 / 未克隆 1），
+   `pi-agent-cloud` 这种「目录已经不在了」的行从「只能靠人看」变成 `repo-missing`。
+   但这仍然是「目录」级别的事实：Obsidian vault 目录、同一个 articleeditor 仓被多行共用，都拦不住。
 5. **`schedule-stopped` 只表达停跑，不表达「该跑」**：间隔为正不代表这行值得跑；它只是不再被停跑误放/误拦。
    真正的价值判断仍在 Assessment 与人。
-6. **`auto` = 0 是口径的结果**：若把 8 条「停跑但恢复后可达 auto」的行重新开起来，它们才是切 auto 的第一批；
-   在那之前，`acceptMode` 保持 `observe`。
+6. **`auto` = 0 是口径的结果**：把 7 条「停跑但恢复后过了仓库层」的行重新开起来，它们才是切 auto 的第一批；
+   但要先被 `autonomousRepos` 覆盖、再证明「下一步是仓内可验证改动」。在那之前，`acceptMode` 保持 `observe`。
 7. **单进程边界未变**：`ticket-already-open` 的按仓判定与本文无关，多实例互斥仍需部署约束
    （`docs/policy-v3-allowlist.md` §7）。
+8. **`repo-exists` 只回答「是不是一个可达目录」**：vault 目录（`recvuwiIQze18J`、`reczz28QOfrbeaIn`、
+   `reczz28QkmRdCFEv`）与「不是代码仓的普通目录」都会通过；拦它们只能靠白名单，而不能靠存在性。
+9. **相对路径无法判**：`itemToTrigger()` 接受 `baseDir`，但 `Config` 没暴露它，所以 `recvsp1tyH5vPi`
+   恒为 `repo-path-relative-unresolved`。要支持“相对方向表目录”得先决定这个基准从哪里来（不能默认进程 cwd）。
+10. **存在性进入了指纹**：把仓克隆下来会生成新 Trigger（这是目的）；反过来，移动盘/网络盘断开会让
+   该盘上的行各重判一次。代价是一行决策日志，不是放行。
+11. **每轮多一次 `statSync`/行**（78 行级）。本地盘可忽略；若仍把方向表指向网络路径，`runOnce()` 的
+   耗时会出现一个新的、与模型无关的下限。

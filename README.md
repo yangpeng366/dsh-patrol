@@ -59,7 +59,7 @@ Four rules hold it together:
 | `协作形态` | `approve` ⇒ inferred candidate, never explicit |
 | `审批状态` | `已通过` required; `待审` / `已忽略` / `阻塞` refuse the row |
 | `巡检间隔(分钟)` | the row's own due rule · `0`/blank = 停跑 ⇒ refused with `schedule-stopped` (Policy v4) |
-| `仓库路径` | the Ticket's scope, and the working directory |
+| `仓库路径` | the Ticket's scope, the working directory, and a probed fact: `exists` / `kind` / `normalizedPath` / `reason` (`repo-exists`, see `docs/policy-v4-triage.md` §6.1) |
 | `codex_thread_id` | the session to resume |
 | `当前阶段` | the Ticket's stage |
 | `外部成就` | where the round's result is appended |
@@ -175,10 +175,13 @@ the 2026-11-10 log, 56 of the 68 would-accept rows carry `0` or a blank cell, wh
 way of writing 停跑 (its `巡检占用` column says `0=禁用巡检` in words). v4 refuses those rows with
 `schedule-stopped` before assessment, and refuses a row whose schedule fact is missing for the same
 reason v3 refuses an unconfigured allowlist: a forgotten setting is not a permission. `0` no longer
-means "every round". The 68 rows were classified one by one — 56 excluded, 10 approval, 2 read-only,
-0 auto — in [`docs/policy-v4-triage.md`](docs/policy-v4-triage.md), which also names the facts the
-Gate still cannot get (a real `repo-exists` probe, a structured action type) instead of guessing them
-from `下一步` prose. `acceptMode` stays `observe`; v4 only narrows what may enter assessment.
+means "every round". The same version now reads the repo cell as a fact too: `仓库路径` is parsed and
+probed (`repo-exists`: one reachable directory, or a named refusal such as `repo-missing`,
+`repo-path-ambiguous`, `repo-empty-cell`, `repo-path-unreachable`), and the Gate refuses a row whose
+cell proves nothing — including a row with no such fact at all. The 68 rows were classified one by one
+— 56 excluded, 10 approval, 2 read-only, 0 auto — in [`docs/policy-v4-triage.md`](docs/policy-v4-triage.md),
+which also names the one fact the Gate still cannot get (a structured action type) instead of guessing
+it from `下一步` prose. `acceptMode` stays `observe`; v4 only narrows what may enter assessment.
 
 ## Decision audit（决策审计）
 

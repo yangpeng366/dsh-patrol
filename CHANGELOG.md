@@ -20,10 +20,21 @@
   事实清单（`repo-exists`、动作类型、纯路径列）。
 - `scripts/policy-triage-check.mjs` + `tests/policy-triage-check.spec.ts`：用同一份日志与方向表
   重算逐条表的覆盖、词表、可结构化的口径与 `triage-summary` 计数，文档与数据一处不一致即非零退出。
+- `repo-exists`（Policy v4 补齐的仓库事实）：`src/core/repo-facts.ts` 把方向表 `仓库路径` 的**原始单元格**
+  读成 `exists / kind / normalizedPath / reason / candidates`，处理目录、文件、相对路径、空值、多行/多路径、
+  Windows 路径与带说明文字的单元格；拿不准就 fail-closed（`repo-path-ambiguous`、`repo-path-relative-unresolved`、
+  `repo-path-unreachable` 各自成词，不与 `repo-missing` 混用）。`DirectionFacts.repoExists` 承载该事实，
+  Gate 在仓库白名单之后读它：`reason !== 'repo-exists-ok'` 即拒，缺事实报 `repo-exists-unknown`。
+- `scripts/policy-triage-check.mjs` 新增 `repo:table` / `repo:counts` / `repo:tally`：用 Gate 自己的
+  `inspectRepoPath()` 重算 `docs/policy-v4-triage.md` §6.1 的 8 条候选与 §5 的 68 条分档，
+  文档、机器可读块与探测结果三处必须一致。
 
 ### Changed
 
 - `itemFingerprint()` 纳入 `intervalMin`：停跑→恢复会生成新 Trigger，否则恢复的行永远被判为重复事件。
+- `itemFingerprint()` 纳入仓库存在性（`exists` / `missing`）：仓被克隆回来后重新判定，而不是被当成重复事件。
+- `DirectionPolicy.gate()` 的仓库层变成两步：白名单（`repo-allowlist-unset` / `no-repo-path` /
+  `repo-not-cloned` / `repo-not-autonomous`）→ 存在性（`repo-exists-*`）。仍保持 `observe`，没有任何行切到 auto。
 - `itemIsDue()` 仍让 `0` 通过 due 过滤（不静默吞行）：准入改由 `schedule-stopped` 决定，停跑行在
   决策日志里可见。
 - `patrol row <id>` 的 `巡检间隔` 显示改为 `停跑（0/空）`，不再写“每轮”。

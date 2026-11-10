@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { itemFingerprint, itemIsDue, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
+import { itemFacts, itemFingerprint, itemIsDue, itemRepoFact, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
 import { normalizeItem, type DirectionItem } from '../src/source/provider.ts'
 
 const base: DirectionItem = normalizeItem({
@@ -28,6 +28,38 @@ describe('mapping', () => {
 
   it('keys a thread by the row id', () => {
     expect(itemThreadKey(base)).toBe('patrol:rec1')
+  })
+
+  // Policy v4: the repo cell is a fact, and it is probed — not inferred from the path's shape.
+  it('carries the probed repo cell into the facts', () => {
+    const probed = itemToTrigger({ ...base, repoPath: 'D:\\gitAll\\dsh-patrol' }, '2026-11-10T01:00:00.000Z', {
+      probe: () => ({ kind: 'directory' }),
+    })
+    expect(probed.meta['facts']).toMatchObject({
+      repoPath: 'D:\\gitAll\\dsh-patrol',
+      repoExists: { exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\dsh-patrol', reason: 'repo-exists-ok' },
+    })
+  })
+
+  it('reports an empty repo cell as a refusal rather than as "no repo needed"', () => {
+    expect(itemRepoFact(base)).toMatchObject({ exists: false, kind: 'empty', reason: 'repo-empty-cell' })
+    expect(itemFacts(base, itemRepoFact(base))).toMatchObject({ repoExists: { reason: 'repo-empty-cell' } })
+  })
+
+  it('passes the probe through, so a cell is read against the filesystem the caller names', () => {
+    const seen: string[] = []
+    const fact = itemRepoFact({ ...base, repoPath: 'relative\\repo' }, {
+      baseDir: 'D:\\gitAll',
+      probe: (path) => { seen.push(path); return { kind: 'missing' } },
+    })
+    expect(seen).toEqual(['D:\\gitAll\\relative\\repo'])
+    expect(fact.reason).toBe('repo-missing')
+  })
+
+  // A clone appearing is a state change: without it in the fingerprint, `receive()` would treat the
+  // re-judgement as a duplicate and the row would stay refused as `repo-missing` forever.
+  it('changes the fingerprint when the repo goes from missing to present', () => {
+    expect(itemFingerprint(base, 'missing')).not.toBe(itemFingerprint(base, 'exists'))
   })
 
   it('makes a content-addressed trigger id', () => {
