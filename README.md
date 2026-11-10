@@ -58,7 +58,7 @@ Four rules hold it together:
 | `授权边界` | `自主` ⇒ explicit work · `需审批` ⇒ refused · `只读` ⇒ refused |
 | `协作形态` | `approve` ⇒ inferred candidate, never explicit |
 | `审批状态` | `已通过` required; `待审` / `已忽略` / `阻塞` refuse the row |
-| `巡检间隔(分钟)` | the row's own due rule |
+| `巡检间隔(分钟)` | the row's own due rule · `0`/blank = 停跑 ⇒ refused with `schedule-stopped` (Policy v4) |
 | `仓库路径` | the Ticket's scope, and the working directory |
 | `codex_thread_id` | the session to resume |
 | `当前阶段` | the Ticket's stage |
@@ -78,7 +78,7 @@ minimal config and the uninstall steps are in [Install & configure](#install--co
 | `baseToken` / `tableId` | — | the table to read (Bitable) |
 | `tasksFile` | — | the JSON file to read (local-json) |
 | `identity` | `user` | identity used for the Bitable read |
-| `policyVersion` | `v3` | recorded on every Mandate; v3 makes the repo allowlist fail-closed |
+| `policyVersion` | `v4` | recorded on every Mandate; v3 makes the repo allowlist fail-closed, v4 adds `schedule-stopped` |
 | `paused` | `false` | a paused Policy admits nothing but keeps its rules |
 | `acceptMode` | `observe` | `off` / `observe` / `auto` |
 | `decisionLogPath` | — (off) | append-only JSONL of every decision; relative paths resolve against the process working directory |
@@ -169,6 +169,16 @@ config:
 `--log` writes the same append-only JSONL the plugin writes, so `scripts/policy-audit.mjs` can read
 a shadow round back. Prefixes are compared after normalising case, separators and trailing slashes,
 and a sibling directory (`dsh-patrol-old` next to `dsh-patrol`) is not inside the prefix.
+
+**Policy v4 reads the row's schedule.** `巡检间隔(分钟)` was the one structured fact v3 never read: in
+the 2026-11-10 log, 56 of the 68 would-accept rows carry `0` or a blank cell, which is the table's own
+way of writing 停跑 (its `巡检占用` column says `0=禁用巡检` in words). v4 refuses those rows with
+`schedule-stopped` before assessment, and refuses a row whose schedule fact is missing for the same
+reason v3 refuses an unconfigured allowlist: a forgotten setting is not a permission. `0` no longer
+means "every round". The 68 rows were classified one by one — 56 excluded, 10 approval, 2 read-only,
+0 auto — in [`docs/policy-v4-triage.md`](docs/policy-v4-triage.md), which also names the facts the
+Gate still cannot get (a real `repo-exists` probe, a structured action type) instead of guessing them
+from `下一步` prose. `acceptMode` stays `observe`; v4 only narrows what may enter assessment.
 
 ## Decision audit（决策审计）
 

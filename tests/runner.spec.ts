@@ -13,7 +13,9 @@ async function fixture(): Promise<string> {
   const file = join(dir, 'tasks.json')
   await writeFile(file, JSON.stringify([
     {
-      id: 'rec-due', title: '到期方向', nextStep: '做掉它', priority: 'P0', intervalMin: 0,
+    // 巡检间隔: an interval is now a fact the Gate reads (Policy v4), so the "due" row carries a
+    // real one; `lastRun: null` is what makes it due on the first round.
+      id: 'rec-due', title: '到期方向', nextStep: '做掉它', priority: 'P0', intervalMin: 60,
       authorization: '自主', collaboration: 'sparse', approval: '已通过', currentStage: '开发',
       lastRun: null, repoPath: 'D:\\gitAll\\demo',
     },

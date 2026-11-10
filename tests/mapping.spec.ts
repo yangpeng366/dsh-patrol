@@ -17,6 +17,15 @@ describe('mapping', () => {
     expect(itemFingerprint(base)).not.toBe(itemFingerprint({ ...base, nextStep: '换一件事' }))
   })
 
+  // Without this, a row that is resumed from 停跑 keeps the Trigger id it was refused under, and
+  // `receive()` treats the resume as a duplicate: the Gate would never see the new interval.
+  it('changes the fingerprint when a stopped row is resumed (停跑 → 恢复生新 Trigger)', () => {
+    const stopped = { ...base, intervalMin: 0 }
+    expect(itemFingerprint(stopped)).not.toBe(itemFingerprint({ ...base, intervalMin: 60 }))
+    expect(itemToTrigger(stopped, '2026-11-10T01:00:00.000Z').id)
+      .not.toBe(itemToTrigger({ ...base, intervalMin: 1440 }, '2026-11-10T01:00:00.000Z').id)
+  })
+
   it('keys a thread by the row id', () => {
     expect(itemThreadKey(base)).toBe('patrol:rec1')
   })
@@ -25,7 +34,13 @@ describe('mapping', () => {
     const trigger = itemToTrigger(base, '2026-11-10T01:00:00.000Z')
     expect(trigger.id).toBe(itemToTrigger(base, '2026-11-10T09:00:00.000Z').id)
     expect(trigger.id).not.toBe(itemToTrigger({ ...base, nextStep: '别的' }, '2026-11-10T01:00:00.000Z').id)
-    expect(trigger.meta['facts']).toMatchObject({ authorization: '自主', nextStepPresent: true })
+    expect(trigger.meta['facts']).toMatchObject({ authorization: '自主', nextStepPresent: true, intervalMin: 60 })
+  })
+
+  it('carries 巡检间隔(分钟) as a structured fact, including the stopped value', () => {
+    expect((itemToTrigger(base, '2026-11-10T01:00:00.000Z').meta['facts'] as Record<string, unknown>)['intervalMin']).toBe(60)
+    const stopped = normalizeItem({ id: 'rec3', nextStep: '做事', intervalMin: 0, authorization: '自主' })
+    expect((itemToTrigger(stopped, '2026-11-10T01:00:00.000Z').meta['facts'] as Record<string, unknown>)['intervalMin']).toBe(0)
   })
 
   it('applies the row interval', () => {
@@ -38,6 +53,9 @@ describe('mapping', () => {
     expect(itemIsDue({ ...base, lastRun: null }, now)).toBe(true)
     // A long interval keeps a recent row asleep.
     expect(itemIsDue({ ...base, intervalMin: 1440, lastRun: '2026-11-10T01:30:00.000Z' }, now)).toBe(false)
+    // 停跑(0) still passes the due filter on purpose: admission is the Gate's `schedule-stopped`,
+    // so the refusal is recorded in the decision log instead of the row vanishing from it.
+    expect(itemIsDue({ ...base, intervalMin: 0, lastRun: '2026-11-10T01:00:00.000Z' }, now)).toBe(true)
   })
 })
 

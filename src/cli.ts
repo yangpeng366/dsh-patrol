@@ -180,7 +180,7 @@ function renderRowDetail(item: DirectionItem): string {
     `待审行动: ${item.pendingAction || '（空）'}`,
     `会话: ${item.threadId ?? '（无）'}`,
     `最近执行: ${item.lastRun ?? '（无）'}`,
-    `巡检间隔: ${item.intervalMin > 0 ? `${item.intervalMin} 分钟` : '每轮'}`,
+    `巡检间隔: ${item.intervalMin > 0 ? `${item.intervalMin} 分钟` : '停跑（0/空）'}`,
     `假数据: ${item.fake ? '是' : '否'}`,
     '描述:',
     item.description || '（空）',

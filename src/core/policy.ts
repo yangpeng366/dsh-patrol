@@ -44,6 +44,13 @@ export interface DirectionFacts {
   priority: string
   /** Whether the row carries a concrete next action. */
   nextStepPresent: boolean
+  /**
+   * The row's own `巡检间隔(分钟)`, exactly as the source wrote it: a positive number of minutes,
+   * or `0` when the cell is 0/blank. The table's `巡检占用` column spells the convention out
+   * ("0=禁用巡检", and resuming means writing a real interval back), so 0 is a stopped row, not
+   * "every round". Missing is read the same way as 0 — see `schedule-stopped` below.
+   */
+  intervalMin?: number
   /** Whether the row asks for a dry run. */
   fake: boolean
   /**
@@ -59,6 +66,7 @@ export interface DirectionFacts {
  *
  * Mapping to the prototype's model:
  *   - `授权边界` decides whether work may start at all and how strong the claim is.
+ *   - `巡检间隔(分钟)` decides whether the row is running at all: 0/blank is 停跑 (v4).
  *   - `协作形态=approve` is the prototype's `accept mode = observe`: the Assessment's verdict is
  *     recorded but not acted on, so a human can review a decision history before opening the gate.
  *   - `审批状态` is a human stop: `已忽略` / `阻塞` refuse work outright.
@@ -105,6 +113,9 @@ export class DirectionPolicy implements Policy {
     if (this.paused) return { admissible: false, reason: 'policy-paused' }
     const facts = trigger.meta['facts'] as DirectionFacts | undefined
     if (!facts) return { admissible: false, reason: 'no-direction-facts' }
+    // Policy v4 reads the row's schedule before anything else: a stopped row produces no work
+    // whatever its approval state says, and "why did nothing run" has exactly one first answer.
+    if (this.isStopped(facts)) return { admissible: false, reason: 'schedule-stopped' }
     if (facts.approval === '已忽略') return { admissible: false, reason: 'approval-ignored' }
     if (facts.approval === '阻塞') return { admissible: false, reason: 'approval-blocked' }
     if (facts.approval === '待审') return { admissible: false, reason: 'approval-pending' }
@@ -136,6 +147,23 @@ export class DirectionPolicy implements Policy {
     if (mandate.basis.policyVersion === this.version) return true
     // A newer Policy does not revoke a granted Mandate; it only refuses to widen it.
     return mandate.strength === 'explicit'
+  }
+
+  /**
+   * Whether the row's own schedule says it is stopped (Policy v4).
+   *
+   * `巡检间隔(分钟)` is the one structured fact the v3 gate never read, and the one the observed
+   * round got wrong: 56 of the 68 would-accept rows in the 2026-11-10 log carry 0 or a blank cell,
+   * which the table's own `巡检占用` column defines as 停跑 (`docs/policy-v4-triage.md` §2). Reading
+   * it as "due every round" is what put rows nothing was expected from into the accept set.
+   *
+   * A missing fact is refused too, and not because the row is known to be stopped: an unstated
+   * schedule is a forgotten setting, and v3 already established that a forgotten setting is not a
+   * permission (`repo-allowlist-unset`). The two refusals share one rule, not two.
+   */
+  private isStopped(facts: DirectionFacts): boolean {
+    const interval = facts.intervalMin
+    return typeof interval !== 'number' || !Number.isFinite(interval) || interval <= 0
   }
 
   /**

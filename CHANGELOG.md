@@ -11,6 +11,22 @@
 
 ### Added
 
+- Policy `v4`：新增 `schedule-stopped`。`巡检间隔(分钟)` 作为结构化事实进入 `DirectionFacts`，
+  `0`/空（表内约定即停跑，`巡检占用` 列写明 `0=禁用巡检`）在 Gate 第一道行级检查被拒；
+  事实缺失同样拒绝（与 v3 的 `repo-allowlist-unset` 同一条理由）。`0` 不再被读成“每轮”。
+  `Config.policyVersion` 默认从 `v3` 升到 `v4`；`inferredRules` 未放宽，`acceptMode` 仍为 `observe`。
+- `docs/policy-v4-triage.md`：2026-11-10 那 68 条 would-accept 的逐条定性（excluded 56 / approval 10 /
+  read-only 2 / auto 0）、判定口径与代码落点的对应、日志/表不一致、以及 Policy 仍未拿到的
+  事实清单（`repo-exists`、动作类型、纯路径列）。
+- `scripts/policy-triage-check.mjs` + `tests/policy-triage-check.spec.ts`：用同一份日志与方向表
+  重算逐条表的覆盖、词表、可结构化的口径与 `triage-summary` 计数，文档与数据一处不一致即非零退出。
+
+### Changed
+
+- `itemFingerprint()` 纳入 `intervalMin`：停跑→恢复会生成新 Trigger，否则恢复的行永远被判为重复事件。
+- `itemIsDue()` 仍让 `0` 通过 due 过滤（不静默吞行）：准入改由 `schedule-stopped` 决定，停跑行在
+  决策日志里可见。
+- `patrol row <id>` 的 `巡检间隔` 显示改为 `停跑（0/空）`，不再写“每轮”。
 - `scripts/release-check.mjs`：发布前一条命令完成 `pnpm typecheck` / `test` / `build`、`pnpm pack`
   到系统临时目录、tarball 必需内容（`package.json`、`lib/index.js`、`lib/index.d.ts`、`lib/cli.js`、
   `cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`skills/dsh-patrol/SKILL.md`）与禁入内容

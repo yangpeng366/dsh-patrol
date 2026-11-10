@@ -36,8 +36,11 @@ export const Config = z.object({
   tasksFile: z.string().default(''),
   /** Identity used for the Bitable read. */
   identity: z.enum(['user', 'bot']).default('user'),
-  /** Version of the Policy; a change is recorded on every Mandate. v3 = fail-closed repo allowlist. */
-  policyVersion: z.string().default('v3'),
+  /**
+   * Version of the Policy; a change is recorded on every Mandate.
+   * v3 = fail-closed repo allowlist. v4 = v3 + `schedule-stopped` (巡检间隔 0/空 不再当"每轮").
+   */
+  policyVersion: z.string().default('v4'),
   /** Whether the Policy admits anything at all. */
   paused: z.boolean().default(false),
   /** `observe` records what would have been accepted and starts nothing. */

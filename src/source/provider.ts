@@ -15,7 +15,11 @@ export interface DirectionItem {
   /** The row's own action line. Empty means there is nothing concrete to do yet. */
   nextStep: string
   priority: Priority
-  /** Shortest polling interval in minutes; 0 means every round. */
+  /**
+   * Shortest polling interval in minutes. 0 means the row's schedule is stopped (停跑): the table
+   * writes 0/blank for a row it does not want polled, and its `巡检占用` column says so in words.
+   * Policy v4 refuses a stopped row with `schedule-stopped`; it never reads 0 as "every round".
+   */
   intervalMin: number
   repoPath: string
   /** Executor session id to resume, when the row has one. */

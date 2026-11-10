@@ -71,7 +71,7 @@ export interface ScenarioResult {
 
 /** One row of the direction table, as the real mapping shapes it. */
 function trigger(rowId: string, repoPath: string, threadKey = `patrol:${rowId}`): Trigger {
-  const facts = { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, repoPath }
+  const facts = { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 60, repoPath }
   return {
     id: `trg_${rowId}`,
     source: 'direction-table',

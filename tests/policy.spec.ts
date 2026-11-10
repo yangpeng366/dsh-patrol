@@ -20,6 +20,8 @@ function trigger(overrides: Record<string, unknown> = {}): Trigger {
         priority: 'P1',
         fake: false,
         nextStepPresent: true,
+        // A running row: `巡检间隔(分钟)` > 0. Policy v4 refuses anything without one.
+        intervalMin: 60,
       },
       ...overrides,
     },
@@ -65,6 +67,39 @@ describe('DirectionPolicy.gate', () => {
 
   it('refuses a row with no concrete next step', () => {
     expect(policy.gate(facts({ nextStepPresent: false }), thread, []).admissible).toBe(false)
+  })
+
+  // Policy v4: `巡检间隔(分钟)` 0/blank is 停跑, and the Gate is the one place that says so.
+  // The assertion is the *reason*, not just the refusal: the triage in
+  // docs/policy-v4-triage.md counts these rows under that name.
+  it('refuses a stopped row (巡检间隔=0) with schedule-stopped, never as "due every round"', () => {
+    const result = policy.gate(facts({ intervalMin: 0 }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('schedule-stopped')
+  })
+
+  it('refuses a row whose schedule fact is missing, because an unstated interval is not a licence', () => {
+    const { intervalMin: _omitted, ...withoutInterval } = trigger().meta['facts'] as Record<string, unknown>
+    const result = policy.gate(trigger({ facts: withoutInterval }), thread, [])
+    expect(result.admissible).toBe(false)
+    if (!result.admissible) expect(result.reason).toBe('schedule-stopped')
+  })
+
+  it('admits the same row once its interval is positive again (停跑 → 恢复)', () => {
+    expect(policy.gate(facts({ intervalMin: 0 }), thread, []).admissible).toBe(false)
+    expect(policy.gate(facts({ intervalMin: 1440 }), thread, []).admissible).toBe(true)
+  })
+
+  it('reads the schedule before approval and authorization, so a stopped row reports one reason', () => {
+    for (const stopped of [
+      facts({ intervalMin: 0, approval: '阻塞' }),
+      facts({ intervalMin: 0, authorization: '只读' }),
+      facts({ intervalMin: 0, nextStepPresent: false }),
+    ]) {
+      const result = policy.gate(stopped, thread, [])
+      expect(result.admissible).toBe(false)
+      if (!result.admissible) expect(result.reason).toBe('schedule-stopped')
+    }
   })
 
   it('refuses when the thread already has an open ticket', () => {

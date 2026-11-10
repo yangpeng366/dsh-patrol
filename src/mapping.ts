@@ -15,6 +15,9 @@ export function itemFingerprint(item: DirectionItem): string {
   const material = [
     item.id, item.title, item.nextStep, item.currentStage, item.priority,
     item.authorization, item.collaboration, item.approval, item.pendingAction,
+    // `巡检间隔` is part of the row's state, not just its schedule: 停跑 → 恢复 has to produce a
+    // new Trigger, or the row that was refused as `schedule-stopped` could never be re-judged.
+    item.intervalMin,
     item.repoPath, item.lastRun ?? '',
   ].join('\u0001')
   return createHash('sha1').update(material).digest('hex').slice(0, 16)
@@ -29,6 +32,8 @@ export function itemFacts(item: DirectionItem): DirectionFacts {
     priority: item.priority,
     fake: item.fake,
     nextStepPresent: item.nextStep.trim().length > 0,
+    // Structured, never derived from the prose: the Gate must not read `下一步` for keywords.
+    intervalMin: item.intervalMin,
     repoPath: item.repoPath,
   }
 }
@@ -82,6 +87,9 @@ export function itemStage(item: DirectionItem): string {
 
 /** Whether a row is due at `now`, by its own interval. */
 export function itemIsDue(item: DirectionItem, now: Date): boolean {
+  // Scheduling only: `0` (停跑) is deliberately still "due" here, so the Gate can record
+  // `schedule-stopped` in the decision log instead of the row quietly disappearing from it.
+  // Admission is Policy v4's `schedule-stopped`, not this filter.
   const interval = item.intervalMin > 0 ? item.intervalMin : 60
   if (!item.lastRun) return true
   const last = new Date(item.lastRun)
