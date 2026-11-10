@@ -17,7 +17,7 @@ function trigger(id: string, overrides: Record<string, unknown> = {}): Trigger {
       nextStep: '把下一步做完',
       repoPath: 'D:\\gitAll\\demo',
       stage: '开发',
-      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true },
+      facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, repoPath: 'D:\\gitAll\\demo' },
       ...overrides,
     },
   }
@@ -65,7 +65,7 @@ describe('Engine rounds', () => {
 
   it('holds an inferred verdict in observe mode and starts nothing', async () => {
     const { instance, started, decisions } = engine({ mode: 'observe' })
-    instance.receive(trigger('trg1', { facts: { authorization: '自主', collaboration: 'approve', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true } }))
+    instance.receive(trigger('trg1', { facts: { authorization: '自主', collaboration: 'approve', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, repoPath: 'D:\\gitAll\\demo' } }))
     const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'))
     expect(summary.observed).toBe(1)
     expect(summary.admitted).toBe(0)

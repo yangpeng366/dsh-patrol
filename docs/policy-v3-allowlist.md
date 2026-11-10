@@ -43,7 +43,7 @@ v3 只动「仓库」这一层与默认值。`approval` / `authorization` / `nex
 | 白名单未命中 | `repo-not-autonomous` | `repo-not-autonomous`（不变） |
 | 行内无仓库路径 | `no-repo-path` | `no-repo-path`（白名单已配置时） |
 | 行内标注「（未克隆）」 | `repo-not-cloned` | `repo-not-cloned`（不变） |
-| 已存在 open ticket | 仓库层通过后报 `ticket-already-open` | 顺序不变：仓库层先判，通过后仍报 `ticket-already-open` |
+| 已存在 open ticket | 仓库层通过后，**任意** open ticket 都报 `ticket-already-open`（进程级） | 顺序不变，但范围收紧为**同一仓**：同仓其他行的 open ticket 才算，其他仓不再被连坐（见 §7） |
 | `policyVersion` 默认值 | `v1` | `v3` |
 | `revalidate()` 跨版本 | 同版本通过；新版本不撤旧 Mandate，但拒绝放宽 inferred | **不变**（见 §5 残余风险） |
 
@@ -119,7 +119,8 @@ config:
 3. **只改了默认值，不阻止显式配置**：调用方仍可写 `allowAnyRepo: true`，也可以把整块盘写进
    `autonomousRepos`。v3 防的是「忘了配」，不是「配错了」；配置评审仍必要。
 4. **`acceptMode` 未改**：仍是 `observe`。本文只证明「谁会被放行」，不证明「放行后会安全执行」；
-   切 `auto` 前仍需按行内计划做同仓单线程演练（`ticket-already-open` 挡并发）。
+   切 `auto` 前的同仓单线程演练已落地为 `scripts/same-repo-rehearsal.ts`（§7），它证明的是
+   「同一仓不会同时开两条线」，**不**证明多进程/多实例下的互斥，也**不**构成切 `auto` 的决定。
 5. **决策日志只记结论不记行内容**：v3 重跑同一张表时，`repo-allowlist-unset` 会覆盖掉大部分行，
    但日志里从来没有 `下一步` 原文；本表的判断依据是 2026-11-11 01:30 读取的方向表 rev 4368
    （记录 ID 与日志一致），不是日志推断。行文若在 11-10 之后又改过，应以当时内容复核对应结论。
@@ -127,9 +128,61 @@ config:
 ## 6. 验证
 
 ```powershell
-pnpm test        # 61 passed (10 files)
+pnpm test        # 68 passed (11 files)
 pnpm typecheck   # tsc --noEmit, clean
 ```
 
 新增/更新的断言：空白名单拒绝（含全空白项）、显式 opt-in 放行、白名单命中/未命中/归一化、
-未克隆与无路径、`ticket-already-open` 顺序、Config 默认 `v3` 且 `allowAnyRepo=false`。
+未克隆与无路径、`ticket-already-open` 顺序与按仓范围、Config 默认 `v3` 且 `allowAnyRepo=false`、
+以及 §7 的同仓并发演练（5 个场景 + 时间窗重叠断言）。
+
+## 7. 同仓并发演练
+
+`ticket-already-open` 是切 `auto` 前的最后一道闸。方向表里多行指向同一个仓，而「一行一个 thread」
+意味着「同一 thread 只有一条线」不足以代表「同一个仓只有一条线」；这条演练要证明的是后者。
+
+```powershell
+node scripts/same-repo-rehearsal.ts    # 全 PASS 退出码 0，任一失败退出码 1
+pnpm test -- same-repo                 # 同一套场景的 vitest 入口（共用同一模块与同一套断言）
+```
+
+演练走 Engine 的真实路径（`Engine.runRound()` → `Policy.gate()` → `Assessor.assess()` →
+`Engine.openTicket()` → sink），不是只调 `gate()`；Assessor 故意慢 60 ms，那段窗口就是两轮可能
+重叠的地方。
+
+判据（任一不满足即失败）：
+
+| 场景 | 判据 |
+| --- | --- |
+| 同仓两行，先后到达 | 第一条 `admitted` 并开票；第二条 `ignored` / `ticket-already-open`；ticket 总数 1、派发 1 次 |
+| 同仓两行，两轮同时发起 | 只有 1 条 `admitted`、1 个 open ticket、1 次派发；其余决策全为 `ticket-already-open`；两条 Assessment 时间窗重叠 > 0 |
+| ticket ended 之后 | 第二条仍被挡；`endTicket(person)` 后第三条 `admitted`；open=1、总数 2 |
+| 两个不同 repo 同时发起 | 每个 repo 各 1 条 open ticket、共 2 条，都被放行 |
+| 白名单外同仓 | 两条都是 `ignored` / `repo-not-autonomous`，0 ticket（仓库层先于 ticket 层，并发绕不过） |
+
+「同时发起」是字面意思：`runRound()` 连调两次、两次之间不 `await`，两次调用的 Assessment 时间窗
+在报告里打印并断言重叠。2026-11-11 本机实跑样本：
+
+```
+[2] 同仓两行，两轮 runRound() 同时发起（不 await 中间）  (same-repo-concurrent)
+    trg_recB1    verdict=admitted  reason=row-carries-next-step ticket=tkt_08830b5e1a4c  round=rnd_20261111T010000Z_1
+    trg_recB2    verdict=ignored   reason=ticket-already-open  ticket=-  round=rnd_20261111T010000Z_1
+    trg_recB1    verdict=ignored   reason=ticket-already-open  ticket=-  round=rnd_20261111T010000Z_2
+    tickets=1 open=1  dispatched=1
+    assessor windows: patrol:recB1[141.3..201.9]  patrol:recB1[141.4..202.4]
+    overlap=60.5ms  elapsed=61.3ms  (assessor delay=60ms; overlap>0 means at least two assessments were in flight at once)
+```
+
+这条演练顺手暴露并修掉了两个缺陷（详见提交说明与报告）：
+
+1. **`ticket-already-open` 原来是进程级的**：任意一个 open ticket 会挡住整张表的所有行，
+   于是两个不同仓也无法并行。现在 `Ticket` 记录 `repoPath`，闸门只比同仓的 open ticket；
+   没有 `repoPath` 的旧 Ticket 退回按 thread 比较，两者都没有时一律挡（fail-closed）。
+2. **Gate 与开票之间存在 TOCTOU**：`Assessor.assess()` 是 `await`，两轮可以同时通过 Gate
+   再各自开票（同 thread 会覆盖同一张 ticket 并重复派发）。现在 `openTicket()` 之前用当前
+   ticket 集合**重新过闸**，且重检与开票之间没有 `await`，所以提交是原子的；另外，已被
+   另一轮判过的 Trigger 在本轮会被跳过，不再重复判定。
+
+边界：这条演练只覆盖**单进程内**的并发（同一个 `Engine` 实例）。ticket 存放在内存 `Map` 里，
+多进程/多实例、或重启后的进程都不共享这份状态；那种情况下要靠「一仓一实例」的部署约束，
+不能靠这条演练。演练也不改 `acceptMode`：它证明并发闸门有效，不构成切 `auto` 的决定。

@@ -112,11 +112,16 @@ export class DirectionPolicy implements Policy {
     if (facts.authorization === '需审批') return { admissible: false, reason: 'needs-approval' }
     if (!facts.nextStepPresent) return { admissible: false, reason: 'no-next-step' }
 
-    const repoRefusal = this.refuseRepo(facts)
+    const repo = normaliseRepo(String(facts.repoPath ?? ''))
+    const repoRefusal = this.refuseRepo(facts, repo)
     if (repoRefusal) return { admissible: false, reason: repoRefusal }
 
-    const open = tickets.filter((ticket) => ticket.status !== 'ended')
-    if (open.length > 0) return { admissible: false, reason: 'ticket-already-open' }
+    // One open Ticket per **repo**, not one per process: a direction table can hold several rows
+    // that point at the same repo, and those are exactly the rows that must not become two lines
+    // of work. Rows pointing at other repos are untouched by this check.
+    if (tickets.some((ticket) => this.holdsRepo(ticket, repo, thread.key))) {
+      return { admissible: false, reason: 'ticket-already-open' }
+    }
 
     const strength: Strength = facts.collaboration === 'approve' ? 'inferred' : 'explicit'
     return {
@@ -145,15 +150,29 @@ export class DirectionPolicy implements Policy {
    * the caller. An empty array must not be a bypass: `[]` is what a forgotten setting looks like,
    * so treating it as "all repos" is precisely the fail-open default this version removes.
    */
-  private refuseRepo(facts: DirectionFacts): string | undefined {
+  private refuseRepo(facts: DirectionFacts, repo: string): string | undefined {
     if (this.allowAnyRepo) return undefined
     if (this.autonomousRepos.length === 0) return 'repo-allowlist-unset'
     const raw = String(facts.repoPath ?? '').trim()
-    const repo = normaliseRepo(raw)
     if (!repo) return 'no-repo-path'
     if (raw.startsWith('（未克隆）') || raw.startsWith('(未克隆)')) return 'repo-not-cloned'
     const inside = this.autonomousRepos.some((prefix) => repo === prefix || repo.startsWith(`${prefix}\\`))
     return inside ? undefined : 'repo-not-autonomous'
+  }
+
+  /**
+   * Whether an open Ticket already holds this repo.
+   *
+   * Tickets record the repo they were opened for; an ended Ticket holds nothing. A Ticket that
+   * predates `repoPath` cannot be attributed to a repo, so it blocks the thread it belongs to —
+   * and, when it has no thread either, it blocks everything: an unattributable open Ticket must
+   * never be the hole through which a second line opens.
+   */
+  private holdsRepo(ticket: Ticket, repo: string, threadKey: string): boolean {
+    if (ticket.status === 'ended') return false
+    const ticketRepo = normaliseRepo(String(ticket.repoPath ?? ''))
+    if (ticketRepo) return ticketRepo === repo
+    return typeof ticket.threadKey !== 'string' || ticket.threadKey === threadKey
   }
 
   admitsInferred(rules: readonly string[]): boolean {

@@ -76,6 +76,12 @@ export interface Ticket {
   title: string
   /** What this Ticket is allowed to do. */
   scope: string
+  /**
+   * The repo this Ticket was opened for, exactly as the Trigger carried it.
+   * `ticket-already-open` is decided per repo, so this field is what keeps one repo from
+   * becoming two lines of work while leaving other repos free to run in parallel.
+   */
+  repoPath?: string
   status: TicketStatus
   mandate: Mandate
   assignments: Assignment[]

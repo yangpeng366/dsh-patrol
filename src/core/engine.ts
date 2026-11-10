@@ -119,6 +119,9 @@ export class Engine {
     const roundId = this.nextRoundId(now)
     const summary: RoundSummary = { roundId, evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
     for (const trigger of this.pending()) {
+      // Another round may have judged this Trigger while this one awaited the Assessor. Its
+      // disposition is the record then; judging it again would open a second line of work.
+      if (this.dispositions.get(trigger.id)?.state !== 'pending') continue
       const thread = this.threads.get(trigger.threadKey)!
       // The Thread's whole Trigger set is the Assessment's context; every pending Trigger is judged.
       const threadTriggers = thread.triggerIds.map((id) => this.triggers.get(id)).filter((t): t is Trigger => t !== undefined)
@@ -157,7 +160,16 @@ export class Engine {
         continue
       }
 
-      const ticket = this.openTicket(trigger, gate.strength, gate.basis, outcome.title, outcome.scope)
+      // The Assessor was awaited: the ticket set may have changed since the Gate ran. Re-run the
+      // Gate against the tickets as they are *now*, with no await before the open below, so two
+      // rounds racing on the same repo cannot both open a Ticket for it.
+      const commit = this.policy.gate(trigger, thread, this.tickets())
+      if (!commit.admissible) {
+        this.decide(trigger, roundId, evalId, 'ignored', commit.reason, summary)
+        continue
+      }
+
+      const ticket = this.openTicket(trigger, commit.strength, commit.basis, outcome.title, outcome.scope)
       this.decide(trigger, roundId, evalId, 'admitted', outcome.reason, summary, undefined, ticket.id)
       summary.tickets.push(ticket.id)
     }
@@ -213,11 +225,13 @@ export class Engine {
     const id = `tkt_${createHash('sha1').update(trigger.threadKey).digest('hex').slice(0, 12)}`
     const mandate: Mandate = { scope, strength, basis }
     const assignment: Assignment = { id: `asg_${createHash('sha1').update(`${id}:${trigger.id}`).digest('hex').slice(0, 12)}`, ticketId: id, status: 'pending' }
+    const repoPath = trigger.meta['repoPath']
     const ticket: Ticket = {
       id,
       threadKey: trigger.threadKey,
       title,
       scope,
+      repoPath: typeof repoPath === 'string' ? repoPath : undefined,
       status: 'open',
       mandate,
       assignments: [assignment],
