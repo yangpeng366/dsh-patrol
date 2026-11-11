@@ -6,7 +6,7 @@
  */
 import { Engine, type RoundSummary } from './core/engine.ts'
 import type { Dispatcher } from './dispatch.ts'
-import { itemIsDue, itemToTrigger } from './mapping.ts'
+import { itemIsDue, itemIsStopped, itemToTrigger } from './mapping.ts'
 import type { DirectionItem, SourceProvider } from './source/provider.ts'
 
 export interface RunnerOptions {
@@ -33,12 +33,18 @@ export class PatrolRunner {
     const now = this.options.now ? this.options.now() : new Date()
     const items = await this.options.source.listItems()
     const due = items.filter((item) => itemIsDue(item, now))
+    // Stopped rows are not due, but they must not vanish from the log either: the round records
+    // each one as `stopped` (with its record id and the interval the table wrote) instead of
+    // sending it through the Gate to be refused once an hour.
+    const stopped = items.filter((item) => itemIsStopped(item))
 
     for (const item of due) {
       this.options.engine.receive(itemToTrigger(item, now.toISOString()))
     }
 
-    const summary = await this.options.engine.runRound(now)
+    const summary = await this.options.engine.runRound(now, {
+      stopped: stopped.map((item) => itemToTrigger(item, now.toISOString())),
+    })
 
     for (const ticketId of summary.tickets) {
       const ticket = this.options.engine.ticket(ticketId)

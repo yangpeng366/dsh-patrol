@@ -24,27 +24,54 @@ export interface DecisionRecord {
   evalId: string
   threadKey: string
   triggerId: string
-  verdict: 'ignored' | 'unavailable' | 'admitted' | 'observed'
+  /**
+   * `stopped` is the one verdict the Engine reaches without judging the row: its schedule is
+   * stopped (巡检间隔 0/空), so it never enters the Gate's assessment path. The record exists so
+   * "which rows are stopped, and why did nothing run" stays answerable from the log.
+   */
+  verdict: 'ignored' | 'unavailable' | 'admitted' | 'observed' | 'stopped'
   reason: string
   /**
    * Where the action verdict came from: the `动作类型` column or the word list. Present whenever the
    * Trigger carries an action fact, so the log answers "written down or inferred" per row.
    */
   actionSource?: ActionSource
+  /**
+   * The source row's own id (`patrol:<recordId>` is the thread key). Carried so a log reader does
+   * not have to parse `triggerId` to answer "which row was this".
+   */
+  recordId?: string
+  /**
+   * The row's `巡检间隔(分钟)` as the source wrote it, with `0` meaning 停跑. The value, not a
+   * reading of it: a `stopped` record says `0` here, a running row says its real interval.
+   */
+  intervalMin?: number
   /** Present when the verdict was an accept that was held back for review. */
   wouldAccept?: { title: string; scope: string; rules: string[] }
   ticketId?: string
+}
+
+/** What one `runRound` was told about the rows it will not judge. */
+export interface RoundInput {
+  /**
+   * Rows whose schedule is stopped (巡检间隔 0/空). Deliberately *not* received as pending
+   * Triggers: they get a `stopped` record and a count, and never touch the Assessor.
+   */
+  stopped?: readonly Trigger[]
 }
 
 /** The result of one round. */
 export interface RoundSummary {
   /** Identifies the round; the same id is on every `DecisionRecord` the round produced. */
   roundId: string
+  /** Triggers the Gate and the Assessor actually judged. `stopped` rows are not counted here. */
   evaluated: number
   admitted: number
   observed: number
   ignored: number
   unavailable: number
+  /** Rows recorded as `stopped` this round: visible in the log, never assessed, never dispatched. */
+  stopped: number
   tickets: string[]
 }
 
@@ -120,10 +147,22 @@ export class Engine {
     return ticket
   }
 
-  /** Runs one Evaluation round over every pending Trigger, grouped by thread. */
-  async runRound(now: Date = this.now()): Promise<RoundSummary> {
+  /**
+   * Runs one Evaluation round over every pending Trigger, grouped by thread.
+   *
+   * `input.stopped` carries the rows the caller deliberately kept out of the due set because their
+   * schedule is stopped. They are recorded first — "why did nothing run" is the round's first
+   * answer — and then never judged: no Gate, no Assessment, no Ticket.
+   */
+  async runRound(now: Date = this.now(), input: RoundInput = {}): Promise<RoundSummary> {
     const roundId = this.nextRoundId(now)
-    const summary: RoundSummary = { roundId, evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, tickets: [] }
+    const summary: RoundSummary = { roundId, evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, stopped: 0, tickets: [] }
+    const recorded = new Set<string>()
+    for (const trigger of input.stopped ?? []) {
+      if (recorded.has(trigger.id)) continue
+      recorded.add(trigger.id)
+      this.recordStopped(trigger, roundId, summary)
+    }
     for (const trigger of this.pending()) {
       // Another round may have judged this Trigger while this one awaited the Assessor. Its
       // disposition is the record then; judging it again would open a second line of work.
@@ -131,7 +170,7 @@ export class Engine {
       const thread = this.threads.get(trigger.threadKey)!
       // The Thread's whole Trigger set is the Assessment's context; every pending Trigger is judged.
       const threadTriggers = thread.triggerIds.map((id) => this.triggers.get(id)).filter((t): t is Trigger => t !== undefined)
-      const evalId = `eval_${createHash('sha1').update(trigger.id).digest('hex').slice(0, 12)}`
+      const evalId = evalIdOf(trigger.id)
 
       const gate = this.policy.gate(trigger, thread, this.tickets())
       if (!gate.admissible) {
@@ -223,8 +262,43 @@ export class Engine {
       // The source marker is a property of the row, not of the verdict: a refused and an accepted
       // row both say whether their kind was written in the table or inferred from prose.
       actionSource: actionSourceOf(trigger),
+      ...this.rowOf(trigger),
       ...extra, ticketId,
     })
+  }
+
+  /**
+   * Records a row the round deliberately did not judge because its schedule is stopped.
+   *
+   * The reason stays the Policy's own word (`schedule-stopped`) so an audit can still answer "this
+   * row is not supposed to produce work" with one string, but the verdict is `stopped` rather than
+   * `ignored`: nothing was refused this round, the row was not on the roster at all. `evaluated`
+   * does not move — no Gate ran, no Assessor was called, nothing was spent.
+   */
+  private recordStopped(trigger: Trigger, roundId: string, summary: RoundSummary): void {
+    this.dispositions.set(trigger.id, { state: 'evaluated', decision: 'stopped' })
+    summary.stopped += 1
+    this.onDecision?.({
+      roundId,
+      evalId: evalIdOf(trigger.id),
+      threadKey: trigger.threadKey,
+      triggerId: trigger.id,
+      verdict: 'stopped',
+      reason: 'schedule-stopped',
+      actionSource: actionSourceOf(trigger),
+      ...this.rowOf(trigger),
+    })
+  }
+
+  /** The row identity a decision carries: record id and the interval exactly as the source wrote it. */
+  private rowOf(trigger: Trigger): { recordId?: string; intervalMin?: number } {
+    const itemId = trigger.meta['itemId']
+    const facts = trigger.meta['facts'] as { intervalMin?: unknown } | undefined
+    const interval = facts?.intervalMin
+    const row: { recordId?: string; intervalMin?: number } = {}
+    if (typeof itemId === 'string' && itemId !== '') row.recordId = itemId
+    if (typeof interval === 'number' && Number.isFinite(interval)) row.intervalMin = interval
+    return row
   }
 
   private openTicket(
@@ -276,6 +350,11 @@ function actionSourceOf(trigger: Trigger): ActionSource | undefined {
   const facts = trigger.meta['facts'] as { actionFacts?: { source?: ActionSource } } | undefined
   const direct = trigger.meta['actionFacts'] as { source?: ActionSource } | undefined
   return facts?.actionFacts?.source ?? direct?.source
+}
+
+/** One row's Evaluation id: derived from the Trigger id, so a re-judged row keeps its name. */
+function evalIdOf(triggerId: string): string {
+  return `eval_${createHash('sha1').update(triggerId).digest('hex').slice(0, 12)}`
 }
 
 /** Scope helper re-exported for callers that only import the Engine. */

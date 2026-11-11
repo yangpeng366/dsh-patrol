@@ -27,6 +27,10 @@ export interface DecisionLogEntry {
   /** `column` / `text`: written in `动作类型`, or inferred from prose. Absent on old lines. */
   actionSource?: DecisionRecord['actionSource']
   threadKey: string
+  /** The source row's own id. Absent on lines written before the field existed. */
+  recordId?: string
+  /** The row's `巡检间隔(分钟)` as the source wrote it, `0` meaning 停跑. Absent on old lines. */
+  intervalMin?: number
   /** Present when the verdict was an accept held back for review (`observe` / `off`). */
   wouldAccept?: { title: string; scope: string; rules: string[] }
   triggerId: string
@@ -75,6 +79,8 @@ export function toDecisionLogEntry(decision: DecisionRecord, ts: Date): Decision
     evalId: decision.evalId,
   }
   if (decision.actionSource) entry.actionSource = decision.actionSource
+  if (decision.recordId) entry.recordId = decision.recordId
+  if (decision.intervalMin !== undefined) entry.intervalMin = decision.intervalMin
   if (decision.wouldAccept) entry.wouldAccept = decision.wouldAccept
   if (decision.ticketId) entry.ticketId = decision.ticketId
   return entry

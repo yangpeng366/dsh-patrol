@@ -58,7 +58,7 @@ Four rules hold it together:
 | `授权边界` | `自主` ⇒ explicit work · `需审批` ⇒ refused · `只读` ⇒ refused |
 | `协作形态` | `approve` ⇒ inferred candidate, never explicit |
 | `审批状态` | `已通过` required; `待审` / `已忽略` / `阻塞` refuse the row |
-| `巡检间隔(分钟)` | the row's own due rule · `0`/blank = 停跑 ⇒ refused with `schedule-stopped` (Policy v4) |
+| `巡检间隔(分钟)` | the row's own due rule · `0`/blank = 停跑 ⇒ recorded as `stopped`, never dispatched (Policy v4) |
 | `仓库路径` | the Ticket's scope, the working directory, and a probed fact: `exists` / `kind` / `normalizedPath` / `reason` (`repo-exists`, see `docs/policy-v4-triage.md` §6.1) |
 | `codex_thread_id` | the session to resume |
 | `当前阶段` | the Ticket's stage |
@@ -175,7 +175,10 @@ the 2026-11-10 log, 56 of the 68 would-accept rows carry `0` or a blank cell, wh
 way of writing 停跑 (its `巡检占用` column says `0=禁用巡检` in words). v4 refuses those rows with
 `schedule-stopped` before assessment, and refuses a row whose schedule fact is missing for the same
 reason v3 refuses an unconfigured allowlist: a forgotten setting is not a permission. `0` no longer
-means "every round". The same version now reads the repo cell as a fact too: `仓库路径` is parsed and
+means "every round". A stopped row is also no longer offered to the Gate once an hour just to be refused:
+the due filter skips it (`itemIsDue` → `false`), and the round records it as `stopped` with its
+`recordId` and the interval the table wrote, so the log still answers "which rows are stopped".
+The same version now reads the repo cell as a fact too: `仓库路径` is parsed and
 probed (`repo-exists`: one reachable directory, or a named refusal such as `repo-missing`,
 `repo-path-ambiguous`, `repo-empty-cell`, `repo-path-unreachable`), and the Gate refuses a row whose
 cell proves nothing — including a row with no such fact at all. The 68 rows were classified one by one
@@ -198,11 +201,17 @@ JSONL file — one line per decision, UTF-8 without BOM, append-only:
 ```
 
 Each line carries `ts`, `roundId`, `verdict`, `reason`, `threadKey`, `triggerId`, `evalId`,
-`ticketId` (when a Ticket was opened) and `wouldAccept` (when an accept was held back for review):
+`recordId` and the row's own `intervalMin` (with `0` meaning 停跑), `ticketId` (when a Ticket was
+opened) and `wouldAccept` (when an accept was held back for review):
 
 ```json
-{"ts":"2026-11-10T14:33:42.920Z","roundId":"rnd_20261110T010000Z_1","verdict":"observed","reason":"held-by-mode:observe","threadKey":"patrol:rec1","triggerId":"rec1","evalId":"eval_3ff45714ea4c","wouldAccept":{"title":"补齐审计脚本","scope":"D:\\gitAll\\demo","rules":["next-step-present"]}}
+{"ts":"2026-11-10T14:33:42.920Z","roundId":"rnd_20261110T010000Z_1","verdict":"observed","reason":"held-by-mode:observe","threadKey":"patrol:rec1","recordId":"rec1","intervalMin":60,"triggerId":"rec1","evalId":"eval_3ff45714ea4c","wouldAccept":{"title":"补齐审计脚本","scope":"D:\\gitAll\\demo","rules":["next-step-present"]}}
+{"ts":"2026-11-10T14:33:42.921Z","roundId":"rnd_20261110T010000Z_1","verdict":"stopped","reason":"schedule-stopped","threadKey":"patrol:recStop","recordId":"recStop","intervalMin":0,"triggerId":"trg_recStop_3b1c","evalId":"eval_9f2a0d51c7be"}
 ```
+
+A `stopped` line is a row whose schedule is stopped: it was not judged, nothing was assessed, nothing
+was dispatched — but it is in the log, so "which rows are stopped, and why did nothing run" stays a
+query instead of a memory.
 
 Reading it back is what turns `observe` mode into a decision (`scripts/policy-audit.mjs` is also
 clone-only, for the same reason):
@@ -220,24 +229,28 @@ records: 5
 by verdict:
   admitted     0
   observed     2
-  ignored      2
+  stopped      1
+  ignored      1
   unavailable  1
 
 by reason:
       2  held-by-mode:observe
       1  model-timeout
-      1  no-next-step
       1  read-only-direction
+      1  schedule-stopped
 
 would-accept (held for review): 2
   #1 2026-11-10T14:33:42.920Z patrol:rec1 verdict=observed reason=held-by-mode:observe
       title: 补齐审计脚本
       scope: D:\gitAll\demo
       rules: next-step-present
+
+stopped rows (recorded, not dispatched): 1
+  #3 2026-11-10T14:33:42.921Z recStop 巡检间隔=0 reason=schedule-stopped
 ```
 
 `--json` emits the same thing as one object (`total`, `badLines`, `verdicts`, `reasons`,
-`wouldAccept`), so a digest job can gate on `wouldAccept.length` instead of grepping text.
+`wouldAccept`, `stopped`), so a digest job can gate on `wouldAccept.length` instead of grepping text.
 
 Four rules the implementation keeps:
 
@@ -437,11 +450,11 @@ if you no longer want the history. Tickets live in memory only, so a restart sta
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 81 tests
+pnpm test        # vitest run — 191 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 81 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 191 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 CI runs these four steps on every push to `main` and every pull request, on a clean `ubuntu-latest`
 runner with Node 22 (`.github/workflows/verify.yml`): `pnpm install --frozen-lockfile`, then

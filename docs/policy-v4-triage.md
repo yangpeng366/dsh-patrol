@@ -22,6 +22,8 @@ would-accept 已经是 16。本文按 **68 条那份**逐条定性（它才是�
 - 日志与方向表 78 ↔ 78，**双向差集为空**：没有「只在日志」或「只在表」的行。
 - 日志只记结论（`title` / `scope` / `rules`），不记 `下一步` / `当前阶段` / `巡检间隔` / `授权边界`。
   因此 §3 的这些列取**当前表值**（rev 4402）；日志里的 `scope`、`title` 用来核对行内容有没有漂移（§5）。
+  这句说的是 11-10 那两份历史日志；本轮之后的日志行还带 `recordId` 与 `intervalMin`，停跑行另有 `stopped`
+  记录（§6.3）。
 
 ## 2. 判定口径（按任务给定口径执行，未放宽）
 
@@ -416,6 +418,37 @@ source-text=0
    `alternatives` 里可查）；反过来，人改了「下一步」却没改列，列仍然赢。所以「改了文字就改列」成了这张表
    现在的硬规矩，词表降级为预填工具与兜底（列缺失或为空时仍走它，行为与 d02b152 逐字一致）。
 
+### 6.3 停跑行：不进 due，但仍进日志（`stopped`）
+
+§9 原先那条两难——「改 due 过滤，行就从日志里消失；不改，就每 60 分钟被拒一次」——被第三条路取代：
+
+| 层 | 改之前 | 改之后 |
+| --- | --- | --- |
+| `itemIsDue()` | `0` 当 60 分钟，停跑行每小时到期 | `intervalMin <= 0` ⇒ `false`（`itemIsStopped()`），停跑行不再到期 |
+| `PatrolRunner.runOnce()` | 停跑行进入 `receive()` → Gate | 停跑行不进 `receive()`，作为 `stopped` 触发集交给同一轮 |
+| `Engine.runRound()` | 每行一条 `ignored` / `schedule-stopped` | 每条停跑行一条 `verdict: "stopped"` / `reason: "schedule-stopped"`，`evaluated` 不涨 |
+| 决策日志 | 停跑行每小时一条「被拒」 | 停跑行每轮一条「未派工」，带 `recordId` 与 `intervalMin` 原值 |
+
+口径三点，缺一不可：
+
+1. **不派工**：`stopped` 记录在 `pending()` 之前写入，不经过 `Policy.gate()`、不调 Assessor、不开 Ticket。
+   `RoundSummary.stopped` 记条数，`evaluated` 只数真正被 Gate + Assessment 判过的行。
+2. **可见**：每轮为每条停跑行写一条记录，`reason` 仍是 Policy 自己的词 `schedule-stopped`（不是新造的理由），
+   `verdict` 是新的 `stopped`（不是 `ignored`：这轮没有任何东西被拒，这行只是不在名册上）。
+3. **可回答**：记录带 `recordId`（原表 `record_id`）与 `intervalMin`（表里写的原值，`0` 即停跑），
+   所以「哪些行停跑、为什么这轮没跑」是一条查询，不必翻表也不必重放：
+
+   ```bash
+   node scripts/policy-audit.mjs --file .artifacts/patrol-decisions.jsonl --json | jq '.stopped'
+   ```
+
+   `policy-audit` 的 `stopped` 列表逐条给 `recordId` / `intervalMin` / `reason`，人读输出里是独立一段。
+   `wouldAccept` 列表不受影响：`stopped` 行没有 `wouldAccept`，§4 的 68 条与重放数字（§4 表）不变。
+
+Policy 语义一个字没动：`gate()` 仍会在任何停跑行到达时回 `schedule-stopped`（测试 `tests/policy.spec.ts`
+照旧），`auto` / `approval` / `read-only` 的判定与 reason 也不变；变的只是「谁进 Gate」。
+这也让 §5 那条「停跑行恢复后会被 `repo-exists` 再拦一次」的次序保持原样：停跑先，仓库层是恢复后的第二道。
+
 ## 7. 需要新增事实（当前 Policy 拿不到，未偷偷降级）
 | 缺的事实 | 谁产 | 用在哪 | 不补的后果 |
 | --- | --- | --- | --- |
@@ -437,14 +470,17 @@ source-text=0
 
 ```
 pnpm typecheck                      clean
-pnpm test                           15 files / 186 tests passed
+pnpm test                           15 files / 191 tests passed
 pnpm build                          ok
 node scripts/release-check.mjs      RESULT: PASS（8/8 必需文件、无禁入内容、解包 CLI 自检、版本一致）
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl --json
                                     total 78, observed 68, ignored 10, wouldAccept 68
 node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110-v2.jsonl --json
                                     total 78, observed 16, ignored 62, wouldAccept 16
-node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NBY5_20261111_075800_4419.ndjson
+node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md \
+  --file .artifacts/patrol-decisions-20261110.jsonl \
+  --replay-file .artifacts/patrol-decisions-20261110-v2.jsonl \
+  --table .artifacts/direction/tbl2XGd8bO10NBY5_20261111_075800_4419.ndjson
                                     table:coverage 68/68 · table:verdicts ok · table:structure ok ·
                                     repo:table 8/8 · repo:counts 8 candidates / 7 ok / 1 empty / still auto 7 ·
                                     repo:tally 68 records（53 ok / 8 empty / 1 ambiguous / 3 missing /
@@ -455,7 +491,40 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
                                     summary:counts ok · RESULT: PASS
 ```
 
+§6.3 的一轮实测（同一份表快照，`observe`，`allowAnyRepo`，不派工、不回写）：
+
+```
+rows=78
+summary={"roundId":"rnd_20261111T080000Z_1","evaluated":12,"admitted":0,"observed":0,
+         "ignored":12,"unavailable":0,"stopped":66,"tickets":[]}
+assessments=0
+verdicts={"stopped":66,"ignored":12}
+```
+
+66 条停跑行没有一条进 Gate：`evaluated` 只有 12（间隔为正的那 12 行，全部被其它层拒），`stopped` 66 条各自
+一条记录，Assessor 一次没被调。日志里的真实一行：
+
+```json
+{"ts":"2026-11-11T00:11:08.780Z","roundId":"rnd_20261111T080000Z_1","verdict":"stopped","reason":"schedule-stopped","threadKey":"patrol:recvriLOrYiTkY","triggerId":"trg_recvriLOrYiTkY_0f0621dcea9889e1","evalId":"eval_57ad5508ea75","actionSource":"column","recordId":"recvriLOrYiTkY","intervalMin":0}
+```
+
+注意 66 与 §4 的 56 不是一对：§4 只数「68 条 would-accept」里的停跑行，这里数整张表（78 行）的停跑行。
+两者都从同一列读，差别只是集合不同。
+
 新增/调整的断言：
+
+- `tests/runner.spec.ts`（新 1 例，「口径自证」）：一张全是停跑行的表（两条 `0` + 一条空白）跑完一轮后，
+  三行各有一条 `stopped` 记录（`recordId` / `intervalMin=0` / `reason=schedule-stopped` / 同一 `roundId`），
+  `summary.stopped=3`、`summary.evaluated=0`，Assessor 计数 0，`dispatcher.seen` 为空；第二轮再写 3 条——
+  停跑是状态，不是一次性事件。
+- `tests/mapping.spec.ts`：`itemIsDue()` 对 `intervalMin=0`（含 `lastRun: null`）返回 `false`，`itemIsStopped()`
+  为真；原来的「0 仍通过 due 过滤」断言改为反向并写明理由。
+- `tests/engine.spec.ts`（新 1 例）：`runRound(now, { stopped: [...] })` 只记 `stopped`，不调 Assessor，
+  `evaluated` / `ignored` 不动，`pending()` 为空。
+- `tests/decision-log.spec.ts`（新 1 例 + 扩充 1 例）：日志行带 `recordId` / `intervalMin`；`stopped` 行
+  不带 `wouldAccept`（不会被审计当成「本可放行」）。
+- `tests/policy-audit.spec.ts`（新 1 例）：`--json` 的 `verdicts.stopped` 与 `stopped[]`（`recordId` /
+  `intervalMin` / `reason`）；人读输出多一段 `stopped rows (recorded, not dispatched)`。
 
 - `tests/repo-facts.spec.ts`（新，19 例）：目录 / 正斜杠与尾分隔符 / UNC / POSIX / 数组单元格 / 同一路径写两次 ⇒
   `repo-exists-ok`；空、`null`、全空白、空数组、两个仓相加、换行两路径、路径后接注释 ⇒ 各自 reason；
@@ -491,9 +560,11 @@ node scripts/policy-triage-check.mjs --table .artifacts/direction/tbl2XGd8bO10NB
 
 ## 9. 残余风险
 
-1. **`itemIsDue` 仍把 0 当 60 分钟**：停跑行每 60 分钟仍会进 `runRound()`，被 Gate 拒一次（不进 Assessment，
-   不花钱），决策日志会有 `schedule-stopped` 噪音。之所以没改 due 过滤：改了这些行就从决策日志里消失了，
-   「哪行停跑」反而看不见。要静音就改过滤，但要接受这个代价。
+1. **停跑行的「被拒噪音」已消，代价换成日志行数**：`itemIsDue()` 不再把 `0` 当 60 分钟（§6.3），停跑行
+   既不进 Gate、也不进 Assessment；每轮为每条停跑行写一条 `stopped` 记录（整张表 78 行里 66 条停跑
+   ⇒ 66 行/轮；§4 那 68 条子集里是 56 条）。这是买的：行数没有减少，减少的是「被拒一次」这个毫无信息
+   的动作；换来的是 `stopped` 与 `ignored` 分开，审计能直接回答「哪些行停跑」。如果一条日志都不想多，
+   那就得回到「过滤掉停跑行」——那正是本次否掉的两难之一。
 2. **方向表还在改**：11-10 之后已有一条授权字段改动、一条仓库克隆（§5）。本文结论以 rev 4402 为准，
    行内容再变就得重跑 §3 表与 §4 计数。
 3. **`intervalMin` 进指纹** = 升级后第一次轮次会给所有行算新 Trigger id（旧 id 不复用），

@@ -18,6 +18,7 @@ interface AuditJson {
   verdicts: Record<string, number>
   reasons: Record<string, number>
   wouldAccept: { line: number; threadKey: string | null; title: string | null; scope: string | null; rules: string[]; reason: string }[]
+  stopped: { line: number; recordId: string | null; intervalMin: number | null; reason: string }[]
 }
 
 function jsonl(lines: (object | string)[]): string {
@@ -64,6 +65,29 @@ describe('policy-audit', () => {
       rules: ['next-step-present'],
       reason: 'held-by-mode:observe',
     })
+  })
+
+  it('lists stopped rows by record id and the interval the table wrote', () => {
+    const content = jsonl([
+      FILE_UNDER_TEST[0]!,
+      // Written by `Engine.recordStopped()`: a row whose 巡检间隔 is 0 never reaches the Gate, but it
+      // still lands in the log, so "which rows are stopped" is a query, not an archaeology dig.
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_20261110T010000Z_1', verdict: 'stopped', reason: 'schedule-stopped', threadKey: 'patrol:recStop', recordId: 'recStop', intervalMin: 0, triggerId: 'trg_recStop_abc', evalId: 'eval_9' },
+    ])
+    const result = run(content, ['--json'])
+    expect(result.status).toBe(0)
+    const audit = JSON.parse(result.stdout) as AuditJson
+    expect(audit.verdicts).toMatchObject({ admitted: 0, observed: 1, stopped: 1, ignored: 0, unavailable: 0 })
+    expect(audit.stopped).toEqual([
+      expect.objectContaining({ line: 2, recordId: 'recStop', intervalMin: 0, reason: 'schedule-stopped' }),
+    ])
+    // A stopped row is not a held-back accept: it must not leak into the would-accept list.
+    expect(audit.wouldAccept).toHaveLength(1)
+
+    const human = run(content)
+    expect(human.stdout).toContain('stopped rows (recorded, not dispatched): 1')
+    expect(human.stdout).toContain('recStop')
+    expect(human.stdout).toContain('巡检间隔=0')
   })
 
   it('reports bad lines with their line numbers and keeps counting the good ones', () => {

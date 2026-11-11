@@ -127,12 +127,28 @@ export function itemStage(item: DirectionItem): string {
   return item.currentStage.trim() || '探索'
 }
 
-/** Whether a row is due at `now`, by its own interval. */
+/**
+ * Whether the row's schedule is stopped (停跑).
+ *
+ * `0` and a blank cell both normalize to `0` (`normalizeItem()` folds them), and the table's own
+ * `巡检占用` column spells the convention out: `0=禁用巡检`. This is the one place that sentence
+ * becomes a predicate, so the due filter and the round's log agree on which rows are stopped.
+ */
+export function itemIsStopped(item: DirectionItem): boolean {
+  return !(item.intervalMin > 0)
+}
+
+/**
+ * Whether a row is due at `now`, by its own interval.
+ *
+ * A stopped row is never due: it used to be read as "every 60 minutes", which put it through the
+ * Gate once an hour only to be refused as `schedule-stopped` — a refusal that changed nothing and
+ * filled the decision log with noise. The row does not disappear from the log, though: the round
+ * records it as `stopped` before anything is judged (`PatrolRunner.runOnce` → `Engine.runRound`).
+ */
 export function itemIsDue(item: DirectionItem, now: Date): boolean {
-  // Scheduling only: `0` (停跑) is deliberately still "due" here, so the Gate can record
-  // `schedule-stopped` in the decision log instead of the row quietly disappearing from it.
-  // Admission is Policy v4's `schedule-stopped`, not this filter.
-  const interval = item.intervalMin > 0 ? item.intervalMin : 60
+  if (itemIsStopped(item)) return false
+  const interval = item.intervalMin
   if (!item.lastRun) return true
   const last = new Date(item.lastRun)
   if (Number.isNaN(last.getTime())) return true

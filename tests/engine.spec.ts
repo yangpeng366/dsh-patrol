@@ -165,4 +165,35 @@ describe('Engine rounds', () => {
     expect(instance.ticket(secondId)!.status).toBe('running')
     expect(started).toHaveLength(2)
   })
+
+  it('records stopped rows without judging them, and keeps `evaluated` at zero', async () => {
+    let assessments = 0
+    const records: { verdict: string; reason: string; recordId?: string; intervalMin?: number }[] = []
+    const instance = new Engine({
+      policy: new DirectionPolicy({ version: 'v4', allowAnyRepo: true }),
+      assessor: {
+        assess: async () => {
+          assessments += 1
+          return { kind: 'accept', title: '示例方向', scope: 'D:\\gitAll\\demo', reason: 'ok', rules: ['next-step-present'] }
+        },
+      },
+      acceptMode: 'observe',
+      now: () => new Date('2026-11-10T01:00:00.000Z'),
+      onDecision: (decision) => records.push(decision),
+    })
+    const stoppedRow = trigger('trg-stop', { facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 0, repoPath: 'D:\\gitAll\\demo' } })
+
+    const summary = await instance.runRound(new Date('2026-11-10T01:00:00.000Z'), { stopped: [stoppedRow] })
+
+    expect(assessments).toBe(0)
+    expect(summary.stopped).toBe(1)
+    expect(summary.evaluated).toBe(0)
+    expect(summary.ignored).toBe(0)
+    expect(summary.tickets).toEqual([])
+    expect(records).toEqual([
+      expect.objectContaining({ verdict: 'stopped', reason: 'schedule-stopped', recordId: 'rec1', intervalMin: 0 }),
+    ])
+    // Recorded, not pending: a later round does not pick it up by itself either.
+    expect(instance.pending()).toEqual([])
+  })
 })

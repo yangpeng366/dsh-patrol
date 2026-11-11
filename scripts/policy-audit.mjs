@@ -16,7 +16,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 /** Verdict order used for the summary, so two runs on the same file print the same thing. */
-const VERDICT_ORDER = ['admitted', 'observed', 'ignored', 'unavailable']
+const VERDICT_ORDER = ['admitted', 'observed', 'stopped', 'ignored', 'unavailable']
 
 function messageOf(error) {
   return error instanceof Error ? error.message : String(error)
@@ -31,7 +31,7 @@ function preview(raw) {
  * Summarises JSONL text.
  *
  * @param {string} text - File contents, with or without a leading UTF-8 BOM.
- * @returns {{total:number, blankLines:number, badLines:{line:number,error:string,text:string}[], verdicts:Record<string,number>, reasons:Record<string,number>, wouldAccept:object[]}}
+ * @returns {{total:number, blankLines:number, badLines:{line:number,error:string,text:string}[], verdicts:Record<string,number>, reasons:Record<string,number>, wouldAccept:object[], stopped:object[]}}
  */
 export function auditText(text) {
   // A BOM is what a Windows editor adds; strip it instead of reporting line 1 as corrupt.
@@ -65,11 +65,26 @@ export function auditText(text) {
   for (const verdict of VERDICT_ORDER) verdicts[verdict] = 0
   const reasons = {}
   const wouldAccept = []
+  // A `stopped` record is a row the round did not judge at all (巡检间隔 0/空). Listed separately
+  // so the audit answers "which rows are stopped, and why did nothing run" without reading every
+  // line: the record carries recordId and the interval as the table wrote it.
+  const stopped = []
 
   for (const { line, record } of records) {
     verdicts[record.verdict] = (verdicts[record.verdict] ?? 0) + 1
     const reason = typeof record.reason === 'string' && record.reason !== '' ? record.reason : '(none)'
     reasons[reason] = (reasons[reason] ?? 0) + 1
+    if (record.verdict === 'stopped') {
+      stopped.push({
+        line,
+        ts: record.ts ?? null,
+        roundId: record.roundId ?? null,
+        threadKey: record.threadKey ?? null,
+        recordId: record.recordId ?? null,
+        intervalMin: typeof record.intervalMin === 'number' ? record.intervalMin : null,
+        reason,
+      })
+    }
     // `wouldAccept` is the object the Engine puts on a held-back accept. A bare `true` is
     // tolerated so a hand-written line still shows up in the list.
     const held = record.wouldAccept
@@ -100,7 +115,7 @@ export function auditText(text) {
     }
   }
 
-  return { total: records.length, blankLines, badLines, verdicts, reasons, wouldAccept }
+  return { total: records.length, blankLines, badLines, verdicts, reasons, wouldAccept, stopped }
 }
 
 function orderedReasons(reasons) {
@@ -125,6 +140,11 @@ function formatHuman(file, summary) {
     out.push(`      title: ${entry.title ?? '(none)'}`)
     out.push(`      scope: ${entry.scope ?? '(none)'}`)
     if (entry.rules.length > 0) out.push(`      rules: ${entry.rules.join(', ')}`)
+  }
+  out.push('')
+  out.push(`stopped rows (recorded, not dispatched): ${summary.stopped.length}`)
+  for (const entry of summary.stopped) {
+    out.push(`  #${entry.line} ${entry.ts ?? '(no ts)'} ${entry.recordId ?? '(no recordId)'} 巡检间隔=${entry.intervalMin === null ? '(absent)' : entry.intervalMin} reason=${entry.reason}`)
   }
   if (summary.badLines.length > 0) {
     out.push('')

@@ -77,6 +77,25 @@ describe('DecisionLog', () => {
     expect(log.stats()).toMatchObject({ written: 2, failed: 0 })
   })
 
+  it('writes a stopped record as a decision, with the row id and the interval the table wrote', () => {
+    const dir = tempDir()
+    const path = join(dir, 'decisions.jsonl')
+    const log = new DecisionLog({ path, now: () => new Date('2026-11-10T01:00:00.000Z') })
+    // What `Engine.recordStopped()` emits: a verdict of its own, the Policy's reason, and the two
+    // facts an audit needs to answer "which row is stopped, and why did nothing run".
+    log.append(decision({
+      verdict: 'stopped',
+      reason: 'schedule-stopped',
+      wouldAccept: undefined,
+      recordId: 'recStop',
+      intervalMin: 0,
+    }))
+
+    const [record] = lines(path).map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(record).toMatchObject({ verdict: 'stopped', reason: 'schedule-stopped', recordId: 'recStop', intervalMin: 0 })
+    expect(record).not.toHaveProperty('wouldAccept')
+  })
+
   it('never truncates an existing file', () => {
     const dir = tempDir()
     const path = join(dir, 'decisions.jsonl')
@@ -155,6 +174,10 @@ describe('Engine + DecisionLog', () => {
     // "Written down or inferred" travels with the decision, so a log reader can tell a column fact
     // from a reading of prose without going back to the table.
     expect(records[0]!['actionSource']).toBe('text')
+    // The row's identity and its own interval travel too: `stopped` records are only readable if the
+    // line says which row and what 巡检间隔 was.
+    expect(records[0]!['recordId']).toBe('rec1')
+    expect(records[0]!['intervalMin']).toBe(60)
   })
 
   it('marks a decision whose action kind came from the 动作类型 column', async () => {

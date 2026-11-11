@@ -99,5 +99,5 @@ export interface Ticket {
 /** What happened to a Trigger after it was received. */
 export type TriggerDisposition =
   | { state: 'pending' }
-  | { state: 'evaluated'; decision: 'ignored' | 'unavailable' | 'admitted' | 'observed' }
+  | { state: 'evaluated'; decision: 'ignored' | 'unavailable' | 'admitted' | 'observed' | 'stopped' }
   | { state: 'duplicate' }

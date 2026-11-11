@@ -63,8 +63,13 @@
 - `itemFingerprint()` 纳入仓库存在性（`exists` / `missing`）：仓被克隆回来后重新判定，而不是被当成重复事件。
 - `DirectionPolicy.gate()` 的仓库层变成两步：白名单（`repo-allowlist-unset` / `no-repo-path` /
   `repo-not-cloned` / `repo-not-autonomous`）→ 存在性（`repo-exists-*`）。仍保持 `observe`，没有任何行切到 auto。
-- `itemIsDue()` 仍让 `0` 通过 due 过滤（不静默吞行）：准入改由 `schedule-stopped` 决定，停跑行在
-  决策日志里可见。
+- `itemIsDue()` 不再把 `0`（停跑）当 60 分钟：`interval <= 0` 返回 `false`，停跑行不再每轮进 `runRound()`
+  被 Gate 拒一次。可见性没有跟着丢：`PatrolRunner.runOnce()` 把停跑行作为 `stopped` 触发集交给同一轮，
+  `Engine.runRound(now, { stopped })` 为每条写一条 `verdict: "stopped"` / `reason: "schedule-stopped"` 的
+  记录（`recordId` + `intervalMin` 原值，`RoundSummary.stopped` 计数），不调 Assessor、不开 Ticket；
+  `evaluated` 只数真正判过的行。决策日志行同时新增 `recordId` / `intervalMin`。`Policy.gate()` 语义与
+  reason 一字未动。`docs/policy-v4-triage.md` §6.3 / §9.1 记录口径与一轮 78 行实测（66 stopped / 12 进 Gate /
+  0 次 Assessment），`scripts/policy-audit.mjs` 新增 `stopped` 列表与计数。
 - `patrol row <id>` 的 `巡检间隔` 显示改为 `停跑（0/空）`，不再写“每轮”。
 - `scripts/release-check.mjs`：发布前一条命令完成 `pnpm typecheck` / `test` / `build`、`pnpm pack`
   到系统临时目录、tarball 必需内容（`package.json`、`lib/index.js`、`lib/index.d.ts`、`lib/cli.js`、

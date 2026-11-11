@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { itemActionFact, itemFacts, itemFingerprint, itemIsDue, itemRepoFact, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
+import { itemActionFact, itemFacts, itemFingerprint, itemIsDue, itemIsStopped, itemRepoFact, itemThreadKey, itemToTrigger } from '../src/mapping.ts'
 import { normalizeItem, type DirectionItem } from '../src/source/provider.ts'
 
 const base: DirectionItem = normalizeItem({
@@ -127,9 +127,18 @@ describe('mapping', () => {
     expect(itemIsDue({ ...base, lastRun: null }, now)).toBe(true)
     // A long interval keeps a recent row asleep.
     expect(itemIsDue({ ...base, intervalMin: 1440, lastRun: '2026-11-10T01:30:00.000Z' }, now)).toBe(false)
-    // 停跑(0) still passes the due filter on purpose: admission is the Gate's `schedule-stopped`,
-    // so the refusal is recorded in the decision log instead of the row vanishing from it.
-    expect(itemIsDue({ ...base, intervalMin: 0, lastRun: '2026-11-10T01:00:00.000Z' }, now)).toBe(true)
+  })
+
+  it('never treats 停跑(0) as due, so a stopped row is not refused once an hour', () => {
+    const now = new Date('2026-11-10T02:00:00.000Z')
+    // The old reading turned 0 into "every 60 minutes": the row reached the Gate hourly only to be
+    // refused as `schedule-stopped`. Not due is the whole point — the round records it as `stopped`
+    // instead (`tests/runner.spec.ts` asserts the record is not lost).
+    expect(itemIsDue({ ...base, intervalMin: 0, lastRun: '2026-11-10T01:00:00.000Z' }, now)).toBe(false)
+    // Even a row that never ran stays out of the due set while its schedule is stopped.
+    expect(itemIsDue({ ...base, intervalMin: 0, lastRun: null }, now)).toBe(false)
+    expect(itemIsStopped({ ...base, intervalMin: 0 })).toBe(true)
+    expect(itemIsStopped(base)).toBe(false)
   })
 })
 
