@@ -10,8 +10,7 @@ import {
   verifyActionVocabulary,
   writeActionCell,
 } from '../src/core/action-vocabulary.ts'
-import { inspectAction } from '../src/core/action-facts.ts'
-
+import { inspectAction, LEXICON_KINDS } from '../src/core/action-facts.ts'
 /**
  * The nine allowed values, written out here on purpose.
  *
@@ -27,6 +26,13 @@ describe('action vocabulary · the list', () => {
     expect([...ACTION_KINDS]).toEqual(EXPECTED)
     expect(new Set(ACTION_KINDS).size).toBe(EXPECTED.length)
     expect(verifyActionVocabulary()).toEqual([])
+  })
+
+  it('gives every kind the word list can produce an entry, so none is unreachable', () => {
+    // The word list is the second half of the fact source: a tenth kind added to `ACTION_KINDS`
+    // would compile, but no row could ever be inferred as it. `unclear` is the no-evidence answer,
+    // so it is the one kind the list must not name.
+    expect([...LEXICON_KINDS].sort()).toEqual(ACTION_KINDS.filter((kind) => kind !== 'unclear').sort())
   })
 
   it('reads every canonical spelling as valid and writes it back unchanged', () => {
@@ -59,6 +65,18 @@ describe('action vocabulary · recoverable variants are normalized', () => {
     expect(counts).toMatchObject({ total: 3, valid: 1, normalized: 2, missing: 0, invalidAction: 0 })
     expect(counts.byKind['repo-code']).toBe(2)
     expect(counts.byKind['repo-test']).toBe(1)
+  })
+
+  it('keeps the cell\'s own spelling as evidence, so the log quotes what the table said', () => {
+    // The kind is folded; the evidence is not, because "the table wrote AUTO" and "the table wrote
+    // auto" are different audit trails even though they mean the same kind.
+    const bad = inspectAction({ actionType: 'AUTO', nextStep: '补一个单测' })
+    expect(bad.kind).toBe('unclear')
+    // `AUTO` is not a kind (`auto` is the value the Gate refuses), so this is the invalid path: the
+    // evidence must still be the cell as written, not the folded form the comparison used.
+    expect(bad.evidence).toBe('AUTO')
+    expect(inspectAction({ actionType: 'REPO-CODE' }).evidence).toBe('REPO-CODE')
+    expect(inspectAction({ actionType: ' Repo-Code\u00a0' }).evidence).toBe('Repo-Code')
   })
 })
 

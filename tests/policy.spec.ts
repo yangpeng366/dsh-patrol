@@ -312,6 +312,25 @@ describe('DirectionPolicy action layer', () => {
     if (!result.admissible) expect(result.reason).toBe('action-unclear')
   })
 
+  it('refuses a column fact whose evidence is a value the vocabulary does not name', () => {
+    // The exemption is "the cell says a repo kind", so the cell has to be re-read: a fact labelled
+    // `repo-code` while quoting `auto` is an invalid value wearing a valid kind's clothes. Without
+    // this, any caller that built `ActionFacts` by hand could admit a row the column never named.
+    for (const evidence of ['auto', '待定', 'Repo Code', 'repo_code']) {
+      const forged = actionFact({ kind: 'repo-code', source: 'column', field: '动作类型', matched: [], evidence })
+      const result = policy.gate(facts({ actionFacts: forged }), thread, [])
+      expect(result.admissible).toBe(false)
+      if (!result.admissible) expect(result.reason).toBe('action-unclear')
+    }
+  })
+
+  it('admits a column fact whose cell is a recoverable variant of the kind it claims', () => {
+    // `Repo-Code` in the cell is the same fact as `repo-code` (trim + case fold is the only
+    // tolerance), so the exemption must not be narrowed to "already canonical only".
+    const rescued = actionFact({ kind: 'repo-code', source: 'column', field: '动作类型', matched: [], evidence: 'Repo-Code' })
+    expect(policy.gate(facts({ actionFacts: rescued }), thread, []).admissible).toBe(true)
+  })
+
   it('runs after the repo layer and before the ticket layer', () => {
     const allowlisted = new DirectionPolicy({ version: 'v4', autonomousRepos: ['D:\\gitAll\\dsh-patrol'] })
     const open = { id: 'tkt1', status: 'open', repoPath: 'D:\\gitAll\\dsh-patrol' } as unknown as Ticket

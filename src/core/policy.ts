@@ -8,6 +8,7 @@
 import type { Mandate, Strength, Thread, Ticket, Trigger } from './model.ts'
 import type { RepoExistsFact } from './repo-facts.ts'
 import { actionRefusal, isRepoWork, type ActionFacts } from './action-facts.ts'
+import { normalizeActionKind } from './action-vocabulary.ts'
 
 /** One comparable form for a repo path: case, separator and trailing slashes all drop. */
 function normaliseRepo(repo: string): string {
@@ -249,13 +250,18 @@ export class DirectionPolicy implements Policy {
    * that exception a row someone wrote down as `repo-code` would be refused for not matching a word
    * it was never read for — the column would be decoration.
    *
+   * The exception proves itself rather than trusting the label: `evidence` is re-read through the
+   * vocabulary, so a fact that says `kind: 'repo-code'` while quoting a cell that names no kind
+   * (`auto`, a typo, an empty string) is an invalid value wearing a valid kind's clothes, and it is
+   * refused with `action-unclear` like any other unproven repo fact.
+   *
    * A missing fact is refused too. The mapping fills it on every row, so its absence means the
    * caller assembled the facts by hand and skipped the classifier — not that the work is in-repo.
    */
   private refuseAction(facts: DirectionFacts): string | undefined {
     const fact = facts.actionFacts
     if (!fact) return 'action-facts-unknown'
-    const fromColumn = fact.source === 'column' && fact.field === '动作类型' && fact.evidence !== ''
+    const fromColumn = fact.source === 'column' && fact.field === '动作类型' && normalizeActionKind(fact.evidence) === fact.kind
     if (isRepoWork(fact.kind) && fact.matched.length === 0 && !fromColumn) return 'action-unclear'
     return actionRefusal(fact.kind)
   }

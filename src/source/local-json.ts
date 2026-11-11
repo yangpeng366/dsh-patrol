@@ -10,6 +10,7 @@
  *     plugin use (`createSource`) so a round can run end to end without a Bitable table.
  */
 import { readFile, rename, writeFile } from 'node:fs/promises'
+import { writeActionCell } from '../core/action-vocabulary.ts'
 import { normalizeItem, type DirectionItem, type SourceProvider, type WriteBackField } from './provider.ts'
 
 export interface LocalJsonSourceOptions {
@@ -55,7 +56,14 @@ export class LocalJsonFileSource extends LocalJsonSource {
     const index = entries.findIndex((entry) => String(entry['id'] ?? '').trim() === id)
     if (index < 0) throw new Error(`LocalJsonFileSource: no row ${id} in ${this.path}`)
     const entry = entries[index] as Record<string, unknown>
-    for (const [key, value] of Object.entries(fields)) {
+    // A file is a direction table too, so it obeys the same write rule as the Bitable source: the
+    // `动作类型` cell can only become one of the canonical spellings. `writeActionCell()` throws
+    // before `entry` is touched, so a refused value leaves the file exactly as it was, and a
+    // recoverable variant (`Repo-Code`) is stored canonical instead of creating a tenth spelling
+    // that the next read would have to call `invalid`.
+    const next: Partial<Record<WriteBackField, string>> = { ...fields }
+    if (next.actionType !== undefined) next.actionType = writeActionCell(next.actionType)
+    for (const [key, value] of Object.entries(next)) {
       if (value !== undefined) entry[key] = value
     }
     // Write-then-rename so an interrupted report never leaves a half-written table behind.

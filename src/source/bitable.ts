@@ -128,8 +128,9 @@ export class BitableSource implements SourceProvider {
     if (fields.nextStep !== undefined) payload['下一步'] = fields.nextStep
     if (fields.achievement !== undefined) payload['外部成就'] = fields.achievement
     if (fields.threadId !== undefined) payload['codex_thread_id'] = fields.threadId
-    // The only write path for `动作类型`, and it cannot write a tenth option: `writeActionCell()`
-    // either returns one of the nine canonical spellings or throws before a request is made.
+    // One of the two write paths for `动作类型` (the other is `LocalJsonFileSource`), and neither
+    // can write a tenth option: `writeActionCell()` either returns one of the nine canonical
+    // spellings or throws before a request is made.
     if (fields.actionType !== undefined) payload['动作类型'] = writeActionCell(fields.actionType)
     if (Object.keys(payload).length === 0) return
 

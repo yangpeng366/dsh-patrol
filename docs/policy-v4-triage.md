@@ -403,6 +403,10 @@ kind-repo-test=2
 kind-config=2
 source-column=78
 source-text=0
+cell-valid=78
+cell-normalized=0
+cell-missing=0
+invalid_action=0
 ```
 
 结论三句：

@@ -242,6 +242,24 @@ export function verifyActionVocabulary(): string[] {
     if (readActionCell(blank).state !== 'missing') problems.push(`a blank cell (${JSON.stringify(blank)}) is not reported as missing`)
   }
 
+  // The tolerance is exactly trim + case fold, and it is the same tolerance on every entry point
+  // because there is only this one reader. Pin both halves here: a kind surrounded by space must
+  // still be that kind (`normalized`), and a character changed *inside* the spelling must stop
+  // being a kind. A looser reader (adding an alias table, say) would otherwise ship unnoticed and
+  // the write path would keep writing one spelling while reads accepted another.
+  for (const kind of ACTION_KINDS) {
+    for (const variant of [` ${kind}`, `${kind} `, `\u00a0${kind}\u00a0`, kind.toUpperCase()]) {
+      const reading = readActionCell(variant)
+      if (reading.state !== 'normalized' || reading.kind !== kind) {
+        problems.push(`${JSON.stringify(variant)} reads as ${reading.state}/${reading.kind ?? '(none)'}, expected normalized/${kind}`)
+      }
+    }
+    for (const nearMiss of [kind.replace(/-/g, '_'), kind.replace(/-/g, ' '), kind.replace(/-/g, '\uff0d')]) {
+      if (nearMiss === kind) continue
+      if (readActionCell(nearMiss).state !== 'invalid') problems.push(`${JSON.stringify(nearMiss)} is not reported as invalid`)
+    }
+  }
+
   // The tally has to add up on a sample built from the list, or every published count is suspect.
   const sample: (string | undefined)[] = [...ACTION_KINDS, outsider, '', undefined]
   const counts = countActionCells(sample)

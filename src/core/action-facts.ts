@@ -214,6 +214,16 @@ const LEXICON: readonly { kind: Exclude<ActionKind, 'unclear'>; terms: readonly 
   },
 ]
 
+/**
+ * Every kind the word list can actually produce, in precedence order.
+ *
+ * Exported as a fact, not as decoration: `LEXICON` is typed by `ActionKind`, so a tenth kind added
+ * to the vocabulary would compile while no row could ever be inferred as it (no terms, no entry in
+ * the precedence order). The unit tests compare this list against `ACTION_KINDS`, so that gap fails
+ * loudly instead of turning into "the word list just never says `release`".
+ */
+export const LEXICON_KINDS: readonly Exclude<ActionKind, 'unclear'>[] = LEXICON.map((entry) => entry.kind)
+
 /** `贡献类型` values that name a repo action. Used to break ties between repo kinds only. */
 const CONTRIBUTION_KINDS: Readonly<Record<string, Exclude<ActionKind, 'unclear'>>> = {
   功能增强: 'repo-code',
@@ -440,8 +450,11 @@ export function inspectAction(input: ActionInput): ActionFacts {
   }
 
   const columnKind = cell.kind
+  // The cell as written (trimmed), not the folded form: `evidence` is the record of what the table
+  // said, and the reason quotes the same text — a cell reading `AUTO` must not be logged as `auto`.
+  // The kind itself is `cell.kind`, which is the folded spelling.
   const written = cell.raw.trim()
-  const evidence = evidenceAt(cell.value, 0, cell.value.length)
+  const evidence = evidenceAt(written, 0, written.length)
   const lexicalMatch = lexical.kind === 'unclear' ? undefined : toMatch({
     kind: lexical.kind,
     field: lexical.field as ActionField,
@@ -463,7 +476,7 @@ export function inspectAction(input: ActionInput): ActionFacts {
       matched: [],
       evidence,
       field: '动作类型',
-      reason: `「动作类型」列值「${evidenceAt(written, 0, written.length)}」不在允许集合内（${ACTION_KINDS.join(' / ')}），按 unclear 处理并拒绝，未退回词表推断`,
+      reason: `「动作类型」列值「${evidence}」不在允许集合内（${ACTION_KINDS.join(' / ')}），按 unclear 处理并拒绝，未退回词表推断`,
       alternatives,
     }
   }
@@ -475,7 +488,7 @@ export function inspectAction(input: ActionInput): ActionFacts {
       : `，优先于词表推断（词表判为 ${lexical.kind}）`
   // A rescued cell says so: the reader of a reason should not have to re-read the raw value to
   // learn that the table wrote `Repo-Code` and the Gate read `repo-code`.
-  const rescued = cell.state === 'normalized' ? `；列值「${evidenceAt(written, 0, written.length)}」已归一化为 ${columnKind}` : ''
+  const rescued = cell.state === 'normalized' ? `；列值「${evidence}」已归一化为 ${columnKind}` : ''
 
   return {
     kind: columnKind,
