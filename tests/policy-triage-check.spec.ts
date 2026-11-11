@@ -57,8 +57,13 @@ function doc(options: { rows?: string[]; summary?: string; repo?: string[]; acti
   ].join('\n')
   // The fixture rows are `补一个单测` (repo-test) and `发布新版本` (release). Neither dump row has a
   // `动作类型` cell, so both are inferred: the two source counts say so instead of leaving it implicit.
+  // The cell audit therefore reports two `missing` values — the column is not filled, which is a
+  // different fact from "filled and clean".
   const action = options.action === undefined
-    ? ['records=2', 'kind-repo-test=1', 'kind-release=1', 'source-column=0', 'source-text=2']
+    ? [
+      'records=2', 'kind-repo-test=1', 'kind-release=1', 'source-column=0', 'source-text=2',
+      'cell-valid=0', 'cell-normalized=0', 'cell-missing=2', 'invalid_action=0',
+    ]
     : options.action
   return ['# 逐条定性', '', HEADER, RULE, ...rows, '', '```triage-summary', summary, '```', ...(options.repo ?? []), ...(action === null ? [] : ['', '```triage-action', ...action, '```'])].join('\n')
 }
@@ -210,6 +215,9 @@ describe('policy-triage-check', () => {
     // No `动作类型` column in this dump: every kind is inferred, and the report says so.
     expect(result.stdout).toContain('source-column 0')
     expect(result.stdout).toContain('source-text 2')
+    // ...and the cell audit keeps "not filled" as its own bucket instead of a zero-kind.
+    expect(result.stdout).toContain('missing 2')
+    expect(result.stdout).toContain('invalid_action 0')
   })
 
   // The structured column is the fact. `补一个单测` would be repo-test by the word list, but the row
@@ -219,7 +227,7 @@ describe('policy-triage-check', () => {
       { record_id: 'recRun', 项目名: '在跑的行', '巡检间隔(分钟)': [60], 授权边界: ['自主'], 审批状态: [], 下一步: '补一个单测', 仓库路径: 'D:\\gitAll\\run', 动作类型: ['field-ops'] },
       { record_id: 'recStop', 项目名: '停跑的行', '巡检间隔(分钟)': [0], 授权边界: ['自主'], 审批状态: [], 下一步: '发布新版本', 仓库路径: 'D:\\gitAll\\stop' },
     ].map((row) => JSON.stringify(row)).join('\n')
-    const markdown = doc({ action: ['records=2', 'kind-field-ops=1', 'kind-release=1', 'source-column=1', 'source-text=1'] })
+    const markdown = doc({ action: ['records=2', 'kind-field-ops=1', 'kind-release=1', 'source-column=1', 'source-text=1', 'cell-valid=1', 'cell-normalized=0', 'cell-missing=1', 'invalid_action=0'] })
     const result = run({ markdown, table })
     expect(result.stdout).toContain('ok   action:counts')
     expect(result.stdout).toContain('field-ops 1')
@@ -252,6 +260,41 @@ describe('policy-triage-check', () => {
     expect(result.status).toBe(1)
     expect(result.stdout).toContain('FAIL action:counts')
     expect(result.stdout).toContain('no ```triage-action block')
+  })
+
+  // The four cell states are published, not inferred from the kind counts: a value rescued by
+  // trim/case and a value that is not a kind at all are different facts, and neither is a silent
+  // fall-back to the word list.
+  it('publishes valid / normalized / missing / invalid_action for the column itself', () => {
+    const table = [
+      { record_id: 'recRun', 项目名: '在跑的行', '巡检间隔(分钟)': [60], 授权边界: ['自主'], 审批状态: [], 下一步: '补一个单测', 仓库路径: 'D:\\gitAll\\run', 动作类型: ['  Repo-Code '] },
+      { record_id: 'recStop', 项目名: '停跑的行', '巡检间隔(分钟)': [0], 授权边界: ['自主'], 审批状态: [], 下一步: '发布新版本', 仓库路径: 'D:\\gitAll\\stop', 动作类型: ['auto'] },
+    ].map((row) => JSON.stringify(row)).join('\n')
+    const markdown = doc({
+      action: [
+        'records=2', 'kind-repo-code=1', 'kind-unclear=1', 'source-column=2', 'source-text=0',
+        'cell-valid=0', 'cell-normalized=1', 'cell-missing=0', 'invalid_action=1',
+      ],
+    })
+    const result = run({ markdown, table })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('ok   action:counts')
+    expect(result.stdout).toContain('normalized 1')
+    expect(result.stdout).toContain('invalid_action 1')
+    expect(result.stdout).toContain('unreadable: recStop=「auto」')
+  })
+
+  it('fails when the document keeps invalid_action at zero although a cell is unreadable', () => {
+    const table = [
+      { record_id: 'recRun', 项目名: '在跑的行', '巡检间隔(分钟)': [60], 授权边界: ['自主'], 审批状态: [], 下一步: '补一个单测', 仓库路径: 'D:\\gitAll\\run', 动作类型: ['repo-code'] },
+      { record_id: 'recStop', 项目名: '停跑的行', '巡检间隔(分钟)': [0], 授权边界: ['自主'], 审批状态: [], 下一步: '发布新版本', 仓库路径: 'D:\\gitAll\\stop', 动作类型: ['待定'] },
+    ].map((row) => JSON.stringify(row)).join('\n')
+    // The doc claims a clean column: both rows counted, nothing unreadable.
+    const markdown = doc({ action: ['records=2', 'kind-repo-code=1', 'kind-unclear=1', 'source-column=2', 'source-text=0', 'cell-valid=1', 'cell-normalized=0', 'cell-missing=0', 'invalid_action=0'] })
+    const result = run({ markdown, table })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('FAIL action:counts')
+    expect(result.stdout).toContain('invalid_action: doc 0, derived 1')
   })
 
   it('skips the structural checks when no table dump is given, and says so', () => {

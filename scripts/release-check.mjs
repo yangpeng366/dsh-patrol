@@ -7,6 +7,10 @@
  * that something, and it runs the release path a consumer actually takes:
  *
  *   1. `pnpm typecheck` / `pnpm test` / `pnpm build` — the source is green before anything is packaged;
+ *   1b. `src/core/action-vocabulary.ts` passes its own `verifyActionVocabulary()` — the nine action
+ *      kinds are a closed set, every spelling reads back as itself, and the per-kind tally adds up.
+ *      This runs from source even with `--skip-steps`, because it is cheap and it is the invariant
+ *      the rest of the action layer assumes;
  *   2. `pnpm pack` into the system temp directory — nothing is left in the repo;
  *   3. the tarball holds every file the plugin loads at runtime (patch, lib, skill, docs);
  *   4. the tarball holds none of the clone-only material (src, tests, scripts, schemas, residues);
@@ -32,6 +36,16 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * The action vocabulary, loaded from source so its invariants run on every candidate tarball.
+ *
+ * Node >= 22.19 strips the TypeScript the same way `pnpm test` does, and a failure to load is a
+ * failed check (never a crash): a release candidate that cannot read its own vocabulary must not
+ * pass. `--skip-steps` does not skip this — it is the one gate that still runs when pnpm is absent.
+ */
+const vocabulary = await import(new URL('../src/core/action-vocabulary.ts', import.meta.url).href)
+  .catch((error) => ({ loadError: error instanceof Error ? error.message : String(error) }))
 
 /** Everything the loaded plugin, the host patch and the packaged skill need at runtime. */
 const REQUIRED_ENTRIES = [
@@ -194,6 +208,7 @@ function main(argv) {
     steps: [],
     tarball: { file: null, bytes: null, sha256: null, files: null },
     content: { required: { expected: REQUIRED_ENTRIES.length, missing: [] }, forbidden: [] },
+    vocabulary: { kinds: null, problems: [] },
     cli: { command: null, exitCode: null, selfContained: false, specifiers: [] },
     tempDir: null,
     failures,
@@ -235,6 +250,19 @@ function main(argv) {
       if (failures.length > 0) return finish(summary, failures, tempDir, options)
     } else {
       process.stdout.write('\n[1/5] source gates: skipped (--skip-steps)\n')
+    }
+
+    // 1b — the action vocabulary's own invariants, from source. This is the check that keeps the
+    // nine spellings a closed set: a tenth kind, a duplicate, a spelling that no longer reads back
+    // as itself, or a tally that does not add up fails here whether or not vitest ran.
+    process.stdout.write('\n[1b/5] action vocabulary: src/core/action-vocabulary.ts\n')
+    if ('loadError' in vocabulary) {
+      fail('vocabulary:invariants', `cannot load src/core/action-vocabulary.ts: ${vocabulary.loadError}`)
+    } else {
+      const problems = vocabulary.verifyActionVocabulary()
+      summary.vocabulary = { kinds: vocabulary.ACTION_KINDS.length, problems }
+      if (problems.length > 0) fail('vocabulary:invariants', problems.join(' · '))
+      else ok('vocabulary:invariants', `${summary.vocabulary.kinds} kinds · read / count / write agree`)
     }
 
     // 2 — pack into the temp directory, so the repo gains no build output.
@@ -429,6 +457,7 @@ function finish(summary, failures, tempDir, options) {
     lines.push(`  sha256:  ${summary.tarball.sha256}`)
   }
   lines.push(`version: ${summary.version ?? '(none)'}  changelog: ${summary.changelogVersion ?? '(none)'}`)
+  lines.push(`vocabulary: ${summary.vocabulary.kinds ?? '(not loaded)'} kinds, ${summary.vocabulary.problems.length} problem(s)`)
   lines.push(options.keepTemp ? `temp: ${tempDir} (kept)` : 'temp: removed')
   if (failures.length > 0) {
     lines.push('')

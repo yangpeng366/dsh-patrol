@@ -53,6 +53,25 @@ describe('patrol CLI', () => {
     expect(err).toContain('没有 id 为 nope 的行')
   })
 
+  it('shows the 动作类型 cell, and names why there is none', async () => {
+    expect(await main(['row', 'row-1'], io, deps())).toBe(0)
+    expect(out).toContain('动作类型: （空：列值缺失或为空）')
+  })
+
+  it('writes the canonical action type and refuses a value outside the vocabulary', async () => {
+    expect(await main(['report', 'row-1', '--action-type', ' Repo-Code '], io, deps())).toBe(0)
+    let rows = JSON.parse(await readFile(tasksFile, 'utf8')) as Array<Record<string, unknown>>
+    expect(rows[0]?.['actionType']).toBe('repo-code')
+
+    err = ''
+    expect(await main(['report', 'row-1', '--action-type', 'auto'], io, deps())).toBe(2)
+    expect(err).toContain('未知动作类型')
+    expect(err).toContain('repo-code / repo-test')
+    // A refused flag writes nothing: the row keeps the value it had.
+    rows = JSON.parse(await readFile(tasksFile, 'utf8')) as Array<Record<string, unknown>>
+    expect(rows[0]?.['actionType']).toBe('repo-code')
+  })
+
   it('appends a timestamped achievement and updates the other fields', async () => {
     const code = await main(['report', 'row-1', '--stage', '已实现', '--next', '补 CLI 测试', '--achievement', '新增 patrol CLI'], io, deps())
     expect(code).toBe(0)

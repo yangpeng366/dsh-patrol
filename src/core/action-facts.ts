@@ -36,28 +36,22 @@
  *     English boilerplate ("Review the saved Codex output…") and empty cells all land here with a
  *     reason that names what is missing.
  *
- * `docs/policy-v4-triage.md` §6.2 carries the word list and the measured counts; this file is the
- * only place the list is executed.
+ * `docs/policy-v4-triage.md` §6.2 carries the word list and the measured counts; the nine spellings
+ * themselves live in `action-vocabulary.ts`, and this file is the only place the word list is
+ * executed.
  */
+
+import { ACTION_KINDS, normalizeActionKind, readActionCell, type ActionKind } from './action-vocabulary.ts'
 
 /**
  * Every kind a row's action can have, spelled exactly as the structured `动作类型` column spells it.
- * The list is the allowed set: a column value outside it is not a kind, whatever it looks like.
+ *
+ * The list itself lives in `action-vocabulary.ts` and is re-exported here for the callers that grew
+ * up importing it from this module. There is one copy: a spelling added there is a kind here, and a
+ * value outside it is not a kind whatever it looks like.
  */
-export const ACTION_KINDS = [
-  'repo-code',
-  'repo-test',
-  'repo-doc',
-  'field-ops',
-  'release',
-  'secret',
-  'config',
-  'decision',
-  'unclear',
-] as const
-
-/** What kind of work the row's action line asks for. */
-export type ActionKind = (typeof ACTION_KINDS)[number]
+export { ACTION_KINDS }
+export type { ActionKind }
 
 /**
  * Where `kind` came from.
@@ -414,11 +408,12 @@ function inspectCells(input: ActionInput): Omit<ActionFacts, 'source'> {
  * Case and surrounding whitespace are tolerated (`Repo-Code` is `repo-code`), because the cell is
  * typed by a person. Anything else is not guessed at: `auto`, `待定`, `repo code` and a typo all
  * come back `undefined`, and `inspectAction()` turns that into `unclear` rather than into prose.
+ *
+ * The comparison itself lives in `action-vocabulary.ts`, so this function cannot disagree with the
+ * write-back path about what a legal spelling is.
  */
 export function readActionColumn(value: string | undefined): ActionKind | undefined {
-  const raw = (value ?? '').trim().toLowerCase()
-  if (raw === '') return undefined
-  return (ACTION_KINDS as readonly string[]).includes(raw) ? (raw as ActionKind) : undefined
+  return normalizeActionKind(value)
 }
 
 /**
@@ -435,15 +430,18 @@ export function readActionColumn(value: string | undefined): ActionKind | undefi
  */
 export function inspectAction(input: ActionInput): ActionFacts {
   const lexical = inspectCells(input)
-  const raw = (input.actionType ?? '').trim()
+  // One reading, four states (`action-vocabulary.ts`): a blank cell and an absent column are both
+  // `missing`, a recoverable variant is `normalized`, everything else is `invalid`.
+  const cell = readActionCell(input.actionType)
 
-  if (raw === '') {
+  if (cell.state === 'missing') {
     if (input.actionType === undefined) return { ...lexical, source: 'text' }
     return { ...lexical, source: 'text', reason: `「动作类型」列值为空，已退回词表推断；${lexical.reason}` }
   }
 
-  const columnKind = readActionColumn(raw)
-  const evidence = evidenceAt(raw, 0, raw.length)
+  const columnKind = cell.kind
+  const written = cell.raw.trim()
+  const evidence = evidenceAt(cell.value, 0, cell.value.length)
   const lexicalMatch = lexical.kind === 'unclear' ? undefined : toMatch({
     kind: lexical.kind,
     field: lexical.field as ActionField,
@@ -465,7 +463,7 @@ export function inspectAction(input: ActionInput): ActionFacts {
       matched: [],
       evidence,
       field: '动作类型',
-      reason: `「动作类型」列值「${evidence}」不在允许集合内（${ACTION_KINDS.join(' / ')}），按 unclear 处理并拒绝，未退回词表推断`,
+      reason: `「动作类型」列值「${evidenceAt(written, 0, written.length)}」不在允许集合内（${ACTION_KINDS.join(' / ')}），按 unclear 处理并拒绝，未退回词表推断`,
       alternatives,
     }
   }
@@ -475,6 +473,9 @@ export function inspectAction(input: ActionInput): ActionFacts {
     : lexical.kind === 'unclear'
       ? '，词表无命中，以列值为准'
       : `，优先于词表推断（词表判为 ${lexical.kind}）`
+  // A rescued cell says so: the reader of a reason should not have to re-read the raw value to
+  // learn that the table wrote `Repo-Code` and the Gate read `repo-code`.
+  const rescued = cell.state === 'normalized' ? `；列值「${evidenceAt(written, 0, written.length)}」已归一化为 ${columnKind}` : ''
 
   return {
     kind: columnKind,
@@ -484,7 +485,7 @@ export function inspectAction(input: ActionInput): ActionFacts {
     matched: [],
     evidence,
     field: '动作类型',
-    reason: `「动作类型」列写死为 ${columnKind}（结构化列）${agreement}`,
+    reason: `「动作类型」列写死为 ${columnKind}（结构化列${rescued}）${agreement}`,
     alternatives,
   }
 }
@@ -531,23 +532,32 @@ function unclearReason(
   return '未命中任何动作词：动作字段里没有代码/测试/文档/现场/发布/密钥/配置/拍板一类可判定证据'
 }
 
+/**
+ * The refusal code per kind, and the one place "is this repo work" is decided.
+ *
+ * Typed as a total `Record<ActionKind, …>` on purpose: adding a kind to the vocabulary becomes a
+ * compile error here until someone says whether an unattended round may do it, and with which
+ * refusal it is turned away. A `switch` would have let a new kind fall through to `undefined`,
+ * i.e. silently admit it.
+ */
+const REFUSALS: Readonly<Record<ActionKind, ActionRefusal | undefined>> = {
+  'repo-code': undefined,
+  'repo-test': undefined,
+  'repo-doc': undefined,
+  'field-ops': 'action-field-ops',
+  release: 'action-release',
+  secret: 'action-needs-secret',
+  config: 'action-needs-config',
+  decision: 'action-needs-decision',
+  unclear: 'action-unclear',
+}
+
 /** Whether a kind is work an unattended round may do inside a repo. */
 export function isRepoWork(kind: ActionKind): boolean {
-  return kind === 'repo-code' || kind === 'repo-test' || kind === 'repo-doc'
+  return REFUSALS[kind] === undefined
 }
 
 /** The Gate's refusal code for a kind, or `undefined` when the action is repo work. */
 export function actionRefusal(kind: ActionKind): ActionRefusal | undefined {
-  switch (kind) {
-    case 'repo-code':
-    case 'repo-test':
-    case 'repo-doc':
-      return undefined
-    case 'field-ops': return 'action-field-ops'
-    case 'release': return 'action-release'
-    case 'secret': return 'action-needs-secret'
-    case 'config': return 'action-needs-config'
-    case 'decision': return 'action-needs-decision'
-    case 'unclear': return 'action-unclear'
-  }
+  return REFUSALS[kind]
 }

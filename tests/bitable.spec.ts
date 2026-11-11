@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { BitableSource } from '../src/source/bitable.ts'
 
@@ -117,5 +118,26 @@ describe('BitableSource', () => {
     const withoutColumn = new BitableSource({ baseToken: 'base', tableId: 'table', exec: async () => ({ stdout: JSON.stringify(payload) }) })
     const legacy = await withoutColumn.listItems()
     expect(legacy.every((item) => item.actionType === undefined)).toBe(true)
+  })
+
+  // The write path is the other end of the same vocabulary: a canonical spelling goes into the
+  // column as-is, and anything else is refused before a request can create a tenth option.
+  it('writes only a canonical 动作类型 spelling and refuses one outside the vocabulary', async () => {
+    const written: unknown[] = []
+    const source = new BitableSource({
+      baseToken: 'base',
+      tableId: 'table',
+      exec: async (_file, args) => {
+        const at = args.find((arg) => arg.startsWith('@'))
+        if (at) written.push(JSON.parse(readFileSync(at.slice(1), 'utf8'))['动作类型'])
+        return { stdout: '{}' }
+      },
+    })
+    await source.writeBack('rec1', { actionType: ' Repo-Code ' })
+    expect(written).toEqual(['repo-code'])
+
+    await expect(source.writeBack('rec1', { actionType: 'auto' })).rejects.toThrow(/不在词表内/)
+    // The refused write never reached the CLI: still exactly one payload.
+    expect(written).toHaveLength(1)
   })
 })

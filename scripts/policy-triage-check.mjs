@@ -27,6 +27,10 @@
  *      the `triage-action` block equals the per-kind counts plus the two source counts
  *      (`source-column` / `source-text`: written in `动作类型` vs inferred from prose). §6.2 publishes
  *      those counts; the check is what keeps them from becoming prose again.
+ *   7. action vocabulary: every `动作类型` cell is read with the one reading rule in
+ *      `src/core/action-vocabulary.ts`, and the same block carries the four states it can be in
+ *      (`cell-valid` / `cell-normalized` / `cell-missing` / `invalid_action`). A value outside the
+ *      nine is therefore a published number, not a row that silently fell back to the word list.
  *
  *   node scripts/policy-triage-check.mjs
  *   node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md \
@@ -53,6 +57,13 @@ const actionModule = await import(new URL('../src/core/action-facts.ts', import.
   throw new Error(`cannot load src/core/action-facts.ts (needs Node >= 22.19 type stripping): ${messageOf(error)}`)
 })
 const inspectAction = actionModule.inspectAction
+
+// The vocabulary is loaded from source for the same reason: the published counts have to be
+// produced by the module the Gate reads, not by a second list of nine values in this script.
+const vocabulary = await import(new URL('../src/core/action-vocabulary.ts', import.meta.url).href).catch((error) => {
+  throw new Error(`cannot load src/core/action-vocabulary.ts (needs Node >= 22.19 type stripping): ${messageOf(error)}`)
+})
+const { countActionCells, describeActionCells, describeActionKinds, readActionCell } = vocabulary
 
 const VERDICTS = ['auto', 'approval', 'read-only', 'excluded']
 
@@ -200,6 +211,9 @@ export function tableFacts(text) {
       // The structured column, when the dump has it. A missing column and a blank cell both come
       // back `''`, which `inspectAction()` reads as "no structured answer" and falls back from.
       actionType: cell(row['动作类型']),
+      // The same cell untrimmed, for the vocabulary audit: a value that only needed trimming is a
+      // different fact from one that was written canonically, and `cell()` would erase that.
+      actionRaw: rawCell(row['动作类型']),
       repoPath: cell(row['仓库路径']),
       // The untouched cell, for `inspectRepoPath()`: it does its own array/blank/annotation
       // handling, and a cell flattened by `cell()` would lose the shape the Gate sees.
@@ -209,12 +223,17 @@ export function tableFacts(text) {
   return rows
 }
 
-/** A Bitable cell: arrays join, empties become ''. */
-function cell(value) {
+/** A Bitable cell as text: arrays join, empties become '', nothing is trimmed. */
+function rawCell(value) {
   if (value === null || value === undefined) return ''
   if (Array.isArray(value)) return value.map((entry) => (entry && typeof entry === 'object' ? JSON.stringify(entry) : String(entry))).join('')
   if (typeof value === 'object') return JSON.stringify(value)
-  return String(value).trim()
+  return String(value)
+}
+
+/** A Bitable cell: arrays join, empties become ''. */
+function cell(value) {
+  return rawCell(value).trim()
 }
 
 /** The structured verdict the doc's §2 口径 forces, or null when prose decides. */
@@ -438,6 +457,23 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
     // and how many this module still infers. A missing key is a mismatch, not a zero by default.
     actionDerived['source-column'] = bySource.column
     actionDerived['source-text'] = bySource.text
+
+    // The column itself, through the vocabulary's one reading rule: four states, one of them "no
+    // value" and one "not a value". Both are published counts — a report that only counts the
+    // nine makes an unfilled or misspelled column look clean, which is the failure this check is
+    // for. `invalid_action` is also inside `kind-unclear`, because that is what such a row is
+    // recorded as; the two numbers answer "how many" and "how many were unreadable" separately.
+    const cellRows = [...facts.entries()].map(([recordId, rowFacts]) => ({ recordId, reading: readActionCell(rowFacts.actionRaw) }))
+    const cells = countActionCells(cellRows.map(({ reading }) => reading.raw))
+    actionDerived['cell-valid'] = cells.valid
+    actionDerived['cell-normalized'] = cells.normalized
+    actionDerived['cell-missing'] = cells.missing
+    actionDerived['invalid_action'] = cells.invalidAction
+    const invalidSamples = cellRows
+      .filter(({ reading }) => reading.state === 'invalid')
+      .slice(0, 5)
+      .map(({ recordId, reading }) => `${recordId}=「${reading.raw.trim()}」`)
+    const cellDetail = `${describeActionCells(cells)}${invalidSamples.length > 0 ? ` · unreadable: ${invalidSamples.join(', ')}` : ''}`
     const expectedAction = actionBlock ?? {}
     const wrongAction = Object.entries(actionDerived)
       .filter(([key, value]) => expectedAction[key] !== value)
@@ -449,9 +485,9 @@ export function auditTriage({ markdown, decisionsText, replayText, tableText, ha
       actionBlock === null
         ? 'no ```triage-action block'
         : [wrongAction.join(' · '), extraAction.length > 0 ? `unexpected keys: ${extraAction.join(', ')}` : ''].filter(Boolean).join(' · ')
-          || `${actionDerived.records} records · ${Object.entries(byKind).map(([kind, count]) => `${kind} ${count}`).join(' · ')} · source-column ${bySource.column} · source-text ${bySource.text}`,
+          || `${actionDerived.records} records · ${Object.entries(byKind).map(([kind, count]) => `${kind} ${count}`).join(' · ')} · source-column ${bySource.column} · source-text ${bySource.text} · ${cellDetail}`,
     )
-    report.action = { counts: byKind, sources: bySource }
+    report.action = { counts: byKind, sources: bySource, cells, invalidSamples: cellRows.filter(({ reading }) => reading.state === 'invalid').map(({ recordId, reading }) => ({ recordId, raw: reading.raw.trim() })) }
   } else {
     record('table:structure', true, 'skipped: no --table dump, so only coverage, vocabulary and the counts were checked')
     record('repo:table', true, 'skipped: no --table dump, so repo-exists was not recomputed')
@@ -570,6 +606,8 @@ function main(argv) {
     }
     if (report.action) {
       lines.push('', `  action type (recomputed from the dump): ${Object.entries(report.action.counts).map(([kind, count]) => `${kind} ${count}`).join(' · ')}`)
+      lines.push(`  action cells (动作类型 列): ${describeActionKinds(report.action.cells)} · ${describeActionCells(report.action.cells)}`)
+      for (const sample of report.action.invalidSamples) lines.push(`    unreadable: ${sample.recordId} = 「${sample.raw}」 → unclear`)
       lines.push(`  action source: column ${report.action.sources.column} · text ${report.action.sources.text}`)
     }
     if (tableText === null && options.table === '') lines.push('  note: pass --table <dump.ndjson> to re-check the structured verdicts')

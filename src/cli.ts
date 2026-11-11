@@ -12,6 +12,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { ACTION_KINDS, readActionCell } from './core/action-vocabulary.ts'
 import { BitableSource } from './source/bitable.ts'
 import { LocalJsonFileSource } from './source/local-json.ts'
 import type { DirectionItem, SourceProvider, WriteBackField } from './source/provider.ts'
@@ -53,11 +54,13 @@ export class CliError extends Error {
 const USAGE = `用法：
   patrol rows [--json]
   patrol row <id> [--json]
-  patrol report <id> --stage <阶段> --next <下一行> [--achievement <文本|->] [--thread <id>] [--replace]
+  patrol report <id> --stage <阶段> --next <下一行> [--achievement <文本|->] [--thread <id>] [--action-type <kind>] [--replace]
 
 参数：
   --json                        输出机器可读的 JSON
   --replace                     覆盖“外部成就”，默认追加一条带时间的记录
+  --action-type <kind>          回写“动作类型”列，只接受 ${ACTION_KINDS.join(' / ')}
+                                （大小写与首尾空白会归一化；其它值直接报错，不写表）
 
 数据源（命令行参数优先于环境变量）：
   --source local-json|bitable   PATROL_SOURCE
@@ -175,6 +178,7 @@ function renderRowDetail(item: DirectionItem): string {
     `优先级: ${item.priority}`,
     `授权/协作/审批: ${item.authorization} / ${item.collaboration} / ${item.approval}`,
     `仓库: ${item.repoPath || '（空）'}`,
+    `动作类型: ${describeActionCell(item.actionType)}`,
     `当前阶段: ${item.currentStage || '（空）'}`,
     `下一步: ${item.nextStep || '（空）'}`,
     `待审行动: ${item.pendingAction || '（空）'}`,
@@ -188,6 +192,22 @@ function renderRowDetail(item: DirectionItem): string {
     item.achievement || '（空）',
   ]
   return lines.join('\n')
+}
+
+/**
+ * One `动作类型` cell as a person needs to read it: the kind, or why there is none.
+ *
+ * `row` is the surface an operator uses to answer "what does the Gate see for this row", so an
+ * unreadable cell has to look unreadable here — not blank, and not silently thrown away.
+ */
+function describeActionCell(value: string | undefined): string {
+  const reading = readActionCell(value)
+  switch (reading.state) {
+    case 'missing': return '（空：列值缺失或为空）'
+    case 'invalid': return `${reading.raw.trim()}（非法值，按 unclear 处理）`
+    case 'normalized': return `${reading.kind}（由「${reading.raw.trim()}」归一化）`
+    case 'valid': return `${reading.kind}`
+  }
 }
 
 function pad(value: number): string {
@@ -276,16 +296,27 @@ export async function main(argv: string[], io: CliIo, deps: CliDeps = {}): Promi
     const stage = flagString(parsed.flags, 'stage')
     const next = flagString(parsed.flags, 'next')
     const thread = flagString(parsed.flags, 'thread')
+    const actionType = flagString(parsed.flags, 'action-type')
     const text = await resolveAchievementText(parsed.flags, deps)
     const fields: Partial<Record<WriteBackField, string>> = {}
     if (stage !== undefined) fields.currentStage = stage
     if (next !== undefined) fields.nextStep = next
     if (thread !== undefined) fields.threadId = thread
+    if (actionType !== undefined) {
+      // The vocabulary is the contract: a value outside it is a usage error, not a cell to write
+      // and let the next round discover. `readActionCell()` also folds case and surrounding space,
+      // so `Repo-Code` writes `repo-code` instead of creating a tenth option in the column.
+      const reading = readActionCell(actionType)
+      if (reading.kind === undefined) {
+        throw new CliError(`未知动作类型：${actionType || '(空)'}（可选 ${ACTION_KINDS.join(' / ')}）`)
+      }
+      fields.actionType = reading.kind
+    }
     if (text !== undefined && text.trim() !== '') {
       fields.achievement = composeAchievement(row.achievement, text, (deps.now ?? (() => new Date()))(), has(parsed.flags, 'replace'))
     }
     if (Object.keys(fields).length === 0) {
-      throw new CliError('report 没有可写字段：至少给 --stage、--next、--achievement 或 --thread 之一')
+      throw new CliError('report 没有可写字段：至少给 --stage、--next、--achievement、--thread 或 --action-type 之一')
     }
     await source.writeBack(row.id, fields)
     const result = { ok: true, id: row.id, fields }

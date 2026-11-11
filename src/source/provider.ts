@@ -56,8 +56,8 @@ export interface DirectionItem {
   category: string
 }
 
-/** Fields the engine may write back to a row. */
-export type WriteBackField = 'currentStage' | 'nextStep' | 'achievement' | 'threadId'
+/** Fields the engine may write back to a row. `actionType` writes the structured `动作类型` cell. */
+export type WriteBackField = 'currentStage' | 'nextStep' | 'achievement' | 'threadId' | 'actionType'
 
 /** A row-shaped task source. */
 export interface SourceProvider {
