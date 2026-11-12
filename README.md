@@ -12,6 +12,17 @@ result back to the table (方向表回写 / write-back).
 
 **面向 agent 的接入**（CLI 参数、item 形状、退出码）见下文「面向 Agent 的接入」与「不做什么」两节。
 
+## 一键安装（面向 Agent）
+
+```bash
+npx skills add yangpeng366/dsh-patrol          # 安装
+npx skills add yangpeng366/dsh-patrol --list   # 只查不装，先看装进来的是什么
+```
+
+装完拿到的是 `skills/dsh-patrol/SKILL.md` 这份指引。本仓本体是 npm 包（`package.json` 的 `bin` 名
+`patrol`），skill 不携带实现，只负责告诉下游 agent：什么时候该用它，以及怎样读方向表、看一眼行的
+全貌、把一轮结果写回去。
+
 ## Why this exists
 
 DeepSeek Harness is "everything is a plugin", and DeepSeek's own research prototype
@@ -102,18 +113,22 @@ nothing, so a table of directions can be run in shadow mode first and only then 
 ## Shadow run against a real table
 ## CLI（`patrol`）
 
-skill 的前三步——列行、看一行、回写一轮——不依赖 DSH 宿主，装包后直接可用：
+skill 用到的四条命令——列行、看一行、回写一轮、解析一次决策——都不依赖 DSH 宿主，装包后直接可用：
 
 ```bash
 patrol rows
 patrol row <record_id>
 patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievement "做了什么，证据是什么"
+patrol decide <回答文件>
 ```
+
+`decide` 只做格式解析：把模型对 `prompts/decide-next-action.md` 的固定三行回答（`动作:` / `理由:` /
+`人工介入:`，可选 `沉淀:`）读成 JSON，不读数据源、不判断动作是否合理。
 
 数据源按 `--source` / `PATROL_SOURCE` 选择：`local-json` 用 `--tasks-file`，`bitable` 用
 `--base-token` / `--table-id`（或 `PATROL_BASE_TOKEN` / `PATROL_TABLE_ID`）。`report` 默认把新结果
 追加到「外部成就」并标时间，`--replace` 才覆盖；`--achievement -` 从标准输入读，适合贴多行证据；
-`--json` 输出机器可读结果。退出码：0 成功，2 参数/配置/行不存在，1 运行期失败。
+`--json` 输出机器可读结果。退出码：0 成功，2 参数/配置/行不存在/回答格式不合规，1 运行期失败。
 
 ## 面向 Agent 的接入（Agent integration）
 
@@ -126,6 +141,12 @@ patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievem
   patrol rows [--json]
   patrol row <id> [--json]
   patrol report <id> --stage <阶段> --next <下一行> [--achievement <文本|->] [--thread <id>] [--action-type <kind>] [--replace]
+  patrol decide <回答文件>
+
+  decide                        读模型对 prompts/decide-next-action.md 的回答（动作: / 理由: /
+                                人工介入: 是|否，可选 沉淀:），只做格式解析，输出 JSON：
+                                action / reason / needsHuman / skillNote / ignoredLines。
+                                不读数据源、不判断动作是否合理。
 
 参数：
   --json                        输出机器可读的 JSON
@@ -141,17 +162,20 @@ patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievem
   --identity user|bot           PATROL_IDENTITY
   --lark-cli <path>             LARK_CLI
 
-退出码：0 成功；2 参数、配置或行不存在；1 运行期失败。
+退出码：0 成功；2 参数、配置、行不存在或回答格式不合规；1 运行期失败。
+格式不合规的错误码：E-MISSING-FIELD / E-DUPLICATE-FIELD / E-EMPTY-FIELD / E-BAD-FLAG，
+冒号后是 ASCII 字段 id（action / reason / humanFlag）。
 ```
 
 **行形状（item 契约）**：唯一事实源是 `schemas/item.schema.json`（只在源码仓，不随包分发，由
 `tests/contract.spec.ts` / `tests/schema-parity.spec.ts` 校验）；实际读写形状是
 `src/source/provider.ts::DirectionItem`，归一由 `normalizeItem()` 完成。必填 `id` / `title` /
-`priority`（P0/P1/P2，非法降 P2）/ `intervalMin`（`0` = 停跑，不派发）；常用 `repoPath` /
-`nextStep`（空 = 没活）/ `threadId`（续跑会话，空则新建）/ `lastRun`（ISO 时间串，空 = 到期）/
-`currentStage` / `achievement`；审批三件套 `authorization`（自主/需审批/只读）/ `collaboration` /
-`approval`（已通过才放行）；`userNote` / `contribution` / `actionType` / `pendingAction` /
-`category` 等扩展字段归一后原样保留。这份契约与 `patrol-scaffold` 的 item schema 同源。
+`priority`（P0/P1/P2，非法降 P2）/ `intervalMin`（`0` = 停跑，不派发）；常用 `description` /
+`repoPath` / `nextStep`（空 = 没活）/ `threadId`（续跑会话，空则新建）/ `fake`（dry-run 标记）/
+`lastRun`（ISO 时间串，空 = 到期）/ `currentStage` / `achievement`；审批三件套 `authorization`（自主/
+需审批/只读）/ `collaboration` / `approval`（已通过才放行）；`userNote` / `contribution` /
+`actionType` / `pendingAction` / `category` 等扩展字段归一后原样保留。这份契约与 `patrol-scaffold` 的
+item schema 同源。
 
 **换数据源看哪里**：先读 `src/source/provider.ts`（`DirectionItem` + `SourceProvider` —— 只有两个
 方法 `listItems()` / `writeBack(id, fields)`，加上 `normalizeItem`），两个现成实现是
@@ -160,9 +184,9 @@ patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievem
 
 ## 不做什么（What it does not do）
 
-1. **不负责调度与派发。** `patrol` CLI 只做三件事：列行（`rows`）、看一行（`row`）、回写一轮
-   （`report`）。轮次、定时、worker 派发、Ticket 生命周期都在 DSH 宿主内（`roundIntervalMs` +
-   dispatcher），CLI 不跑轮、不派活、不设闹钟。
+1. **不负责调度与派发。** `patrol` CLI 只做四件事：列行（`rows`）、看一行（`row`）、回写一轮
+   （`report`）、解析一次决策回答（`decide`，只做格式解析，不读数据源）。轮次、定时、worker 派发、
+   Ticket 生命周期都在 DSH 宿主内（`roundIntervalMs` + dispatcher），CLI 不跑轮、不派活、不设闹钟。
 2. **不替用户改表结构，也不猜词表外的取值。** 动作类型只有九种（`src/core/action-vocabulary.ts`），
    `--action-type` 给词表外的写法（`repo_code`、`Repo-Code!`）直接报错退出 2、不写表；列名映射是
    写死的（见上方 column mapping 表），新增列要改源码，不是改配置。
@@ -492,9 +516,9 @@ the same table share nothing. Run one instance per repo set.
 
 ### 5. What is in the tarball, and what is not
 
-`files` ships `lib/`, `cordis.patch.yml`, `README.md`, `CHANGELOG.md`, `docs/` and `skills/` (plus
-`LICENSE` and `package.json`, which npm/pnpm always include). `src/`, `tests/`, `schemas/` and
-`scripts/` stay in the source repo:
+`files` ships `lib/`, `cordis.patch.yml`, `README.md`, `CHANGELOG.md`, `docs/`, `prompts/` and
+`skills/` (plus `LICENSE` and `package.json`, which npm/pnpm always include). `src/`, `tests/`,
+`schemas/` and `scripts/` stay in the source repo:
 
 - `schemas/item.schema.json` exists **only in the source repo**, for contract validation: it is
 read by `tests/contract.spec.ts` and `tests/schema-parity.spec.ts`, never by `lib/index.js`, whose
@@ -536,7 +560,8 @@ node scripts/release-check.mjs        # 0 = PASS, 1 = a named check failed, 2 = 
 It verifies: the three gates above pass; `pnpm pack` into the system temp directory produces exactly
 one tarball and leaves none in the repo; the tarball contains `package/package.json`,
 `package/lib/index.js`, `package/lib/index.d.ts`, `package/lib/cli.js`, `package/cordis.patch.yml`,
-`package/README.md`, `package/CHANGELOG.md` and `package/skills/dsh-patrol/SKILL.md`; it contains
+`package/README.md`, `package/CHANGELOG.md`, `package/skills/dsh-patrol/SKILL.md` and
+`package/prompts/decide-next-action.md`; it contains
 none of `package/src/`, `package/tests/`, `package/scripts/`, `package/schemas/`, `node_modules`, or
 archive/log/temp residue; `lib/cli.js` starts from the *unpacked* tarball with no repo
 `node_modules` on the resolution path — run as `--help` and as a real `rows` read, and checked
