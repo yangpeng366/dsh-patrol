@@ -41,7 +41,8 @@
     "README.md",
     "CHANGELOG.md",
     "docs",
-    "skills"
+    "skills",
+    "prompts"
   ],
   "dsh": {
     "bundle": {

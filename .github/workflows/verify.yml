@@ -58,6 +58,12 @@ jobs:
       - name: test
         run: pnpm test
 
+      # The decision layer's own contract: prompt + format parser + `patrol decide`, offline and with
+      # no table configured. `pnpm test` covers it too; naming the file here makes a red step point at
+      # one contract instead of "somewhere in 18 spec files".
+      - name: decision prompt + parser
+        run: pnpm exec vitest run tests/parse-decision.spec.ts
+
       # Runs typecheck/test/build a second time inside the gate, then judges the packed artifact:
       # contents, absence of clone-only material, the unpacked CLI, and version/CHANGELOG agreement.
       - name: release check

@@ -57,6 +57,7 @@ const REQUIRED_ENTRIES = [
   'package/README.md',
   'package/CHANGELOG.md',
   'package/skills/dsh-patrol/SKILL.md',
+  'package/prompts/decide-next-action.md',
 ]
 
 /** Clone-only directories: README §5 says these stay in the source repo. */

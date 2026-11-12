@@ -1,8 +1,12 @@
 # dsh-patrol
 
-A DeepSeek Harness plugin that turns a **row-based task source** into DSH-native work:
-read a direction table (Feishu Bitable by default), turn each due row into a Trigger, admit it
-under a versioned Policy, open a Ticket for what was admitted, and dispatch that Ticket.
+A DeepSeek Harness plugin that turns a **row-based task source** — a 项目方向表 (project direction
+table) in 飞书多维表格 (Feishu Bitable) by default, or a local JSON file — into DSH-native work:
+read the table, turn each due row into a Trigger, admit it under a versioned Policy, open a Ticket
+for what was admitted, dispatch bounded agent work (任务巡检 / patrol round), and write the round's
+result back to the table (方向表回写 / write-back).
+
+**面向 agent 的接入**（CLI 参数、item 形状、退出码）见下文「面向 Agent 的接入」与「不做什么」两节。
 
 ## Why this exists
 
@@ -107,6 +111,63 @@ patrol report <record_id> --stage "已实现" --next "补 CLI 测试" --achievem
 追加到「外部成就」并标时间，`--replace` 才覆盖；`--achievement -` 从标准输入读，适合贴多行证据；
 `--json` 输出机器可读结果。退出码：0 成功，2 参数/配置/行不存在，1 运行期失败。
 
+## 面向 Agent 的接入（Agent integration）
+
+给下游 agent 的接口面，三件事：CLI 怎么调、行数据是什么形状、退出码意味着什么。
+
+**CLI**（源码 `src/cli.ts`，构建产物 `lib/cli.js`，bin 名 `patrol`；`--help` 全文如下）：
+
+```
+用法：
+  patrol rows [--json]
+  patrol row <id> [--json]
+  patrol report <id> --stage <阶段> --next <下一行> [--achievement <文本|->] [--thread <id>] [--action-type <kind>] [--replace]
+
+参数：
+  --json                        输出机器可读的 JSON
+  --replace                     覆盖“外部成就”，默认追加一条带时间的记录
+  --action-type <kind>          回写“动作类型”列，只接受 repo-code / repo-test / repo-doc / field-ops / release / secret / config / decision / unclear
+                                （大小写与首尾空白会归一化；其它值直接报错，不写表）
+
+数据源（命令行参数优先于环境变量）：
+  --source local-json|bitable   PATROL_SOURCE
+  --tasks-file <path>           PATROL_TASKS_FILE
+  --base-token <token>          PATROL_BASE_TOKEN / BITABLE_BASE_TOKEN
+  --table-id <id>               PATROL_TABLE_ID / BITABLE_TABLE_ID
+  --identity user|bot           PATROL_IDENTITY
+  --lark-cli <path>             LARK_CLI
+
+退出码：0 成功；2 参数、配置或行不存在；1 运行期失败。
+```
+
+**行形状（item 契约）**：唯一事实源是 `schemas/item.schema.json`（只在源码仓，不随包分发，由
+`tests/contract.spec.ts` / `tests/schema-parity.spec.ts` 校验）；实际读写形状是
+`src/source/provider.ts::DirectionItem`，归一由 `normalizeItem()` 完成。必填 `id` / `title` /
+`priority`（P0/P1/P2，非法降 P2）/ `intervalMin`（`0` = 停跑，不派发）；常用 `repoPath` /
+`nextStep`（空 = 没活）/ `threadId`（续跑会话，空则新建）/ `lastRun`（ISO 时间串，空 = 到期）/
+`currentStage` / `achievement`；审批三件套 `authorization`（自主/需审批/只读）/ `collaboration` /
+`approval`（已通过才放行）；`userNote` / `contribution` / `actionType` / `pendingAction` /
+`category` 等扩展字段归一后原样保留。这份契约与 `patrol-scaffold` 的 item schema 同源。
+
+**换数据源看哪里**：先读 `src/source/provider.ts`（`DirectionItem` + `SourceProvider` —— 只有两个
+方法 `listItems()` / `writeBack(id, fields)`，加上 `normalizeItem`），两个现成实现是
+`src/source/bitable.ts` / `src/source/local-json.ts`；列名映射在 `docs/001-domain.md`。新数据源只要
+实现这两个方法，归一与 schema 校验都是现成的。
+
+## 不做什么（What it does not do）
+
+1. **不负责调度与派发。** `patrol` CLI 只做三件事：列行（`rows`）、看一行（`row`）、回写一轮
+   （`report`）。轮次、定时、worker 派发、Ticket 生命周期都在 DSH 宿主内（`roundIntervalMs` +
+   dispatcher），CLI 不跑轮、不派活、不设闹钟。
+2. **不替用户改表结构，也不猜词表外的取值。** 动作类型只有九种（`src/core/action-vocabulary.ts`），
+   `--action-type` 给词表外的写法（`repo_code`、`Repo-Code!`）直接报错退出 2、不写表；列名映射是
+   写死的（见上方 column mapping 表），新增列要改源码，不是改配置。
+3. **被 Gate 拒绝的行什么都不写。** 只读/需审批、审批状态未通过、停跑（`intervalMin=0`）、repo
+   不在白名单、`下一步` 为空——这些行在 Assessment 之前就被拒，不派发也不回写；`observe` 模式下
+   整轮不派发也不写回（只记录「本可以放行」）。写回只写非空字段，`--replace` 才覆盖「外部成就」旧值。
+
+失败时：退出码 2 = 参数、配置或行不存在（stderr 打 `patrol: <原因>`）；1 = 运行期失败（网络、
+`lark-cli` 不可用等）；任何失败都不会留下写坏一半的表行。
 
 `observe` mode is meant to be run against a live table before anything is allowed to start
 (`scripts/` ships only in a clone: a tarball install has no `scripts/` directory — see

@@ -9,9 +9,15 @@
  *
  * Source selection is by flags first, environment second, so a skill can call the short form and
  * an operator can override without editing the skill.
+ *
+ * `patrol decide <answer-file>` is the one command that reads no source at all: it takes a model's
+ * answer to `prompts/decide-next-action.md` and returns the parsed decision as JSON. It is here so
+ * the prompt's format has a door with the same exit codes as everything else, and so a skill never
+ * has to re-implement the parse in its own language.
  */
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { DecisionParseError, parseDecisionAnswer } from './core/decision-answer.ts'
 import { ACTION_KINDS, readActionCell } from './core/action-vocabulary.ts'
 import { BitableSource } from './source/bitable.ts'
 import { LocalJsonFileSource } from './source/local-json.ts'
@@ -55,6 +61,12 @@ const USAGE = `用法：
   patrol rows [--json]
   patrol row <id> [--json]
   patrol report <id> --stage <阶段> --next <下一行> [--achievement <文本|->] [--thread <id>] [--action-type <kind>] [--replace]
+  patrol decide <回答文件>
+
+  decide                        读模型对 prompts/decide-next-action.md 的回答（动作: / 理由: /
+                                人工介入: 是|否，可选 沉淀:），只做格式解析，输出 JSON：
+                                action / reason / needsHuman / skillNote / ignoredLines。
+                                不读数据源、不判断动作是否合理。
 
 参数：
   --json                        输出机器可读的 JSON
@@ -70,7 +82,9 @@ const USAGE = `用法：
   --identity user|bot           PATROL_IDENTITY
   --lark-cli <path>             LARK_CLI
 
-退出码：0 成功；2 参数、配置或行不存在；1 运行期失败。`
+退出码：0 成功；2 参数、配置、行不存在或回答格式不合规；1 运行期失败。
+格式不合规的错误码：E-MISSING-FIELD / E-DUPLICATE-FIELD / E-EMPTY-FIELD / E-BAD-FLAG，
+冒号后是 ASCII 字段 id（action / reason / humanFlag）。`
 
 type FlagValue = string | true
 interface ParsedArgs {
@@ -252,6 +266,18 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
+/**
+ * Reads one model answer file. A missing path is a usage error (exit 2), not a crash: the caller
+ * named a file that is not there. The code matches `scripts/parse-decision.ts` on purpose.
+ */
+async function readAnswerFile(path: string): Promise<string> {
+  try {
+    return stripBom(await readFile(path, 'utf8'))
+  } catch (error) {
+    throw new CliError(`E-INPUT-NOT-FOUND|无法读取回答文件 ${path}（${error instanceof Error ? error.message : String(error)}）`)
+  }
+}
+
 function has(flags: Record<string, FlagValue>, name: string): boolean {
   return flags[name] !== undefined
 }
@@ -266,8 +292,16 @@ export async function main(argv: string[], io: CliIo, deps: CliDeps = {}): Promi
       io.out(USAGE)
       return command === undefined && !has(parsed.flags, 'help') ? 2 : 0
     }
-    if (command !== 'rows' && command !== 'row' && command !== 'report') {
+    if (command !== 'rows' && command !== 'row' && command !== 'report' && command !== 'decide') {
       throw new CliError(`未知命令：${command}\n\n${USAGE}`)
+    }
+    // `decide` is answered before the source is resolved: it must work on a machine with no table
+    // configured (CI, a fresh clone), and it must never touch a source just to parse a file.
+    if (command === 'decide') {
+      if (!id) throw new CliError('decide 需要回答文件路径')
+      const answer = parseDecisionAnswer(await readAnswerFile(id))
+      io.out(JSON.stringify(answer, null, 2))
+      return 0
     }
     const settings = resolveSettings(parsed.flags, deps.env ?? process.env)
     const source = (deps.createSource ?? createCliSource)(settings)
@@ -330,6 +364,11 @@ export async function main(argv: string[], io: CliIo, deps: CliDeps = {}): Promi
     if (error instanceof CliError) {
       io.err(`patrol: ${error.message}`)
       return error.exitCode
+    }
+    // A malformed answer is a usage error: the input, not the runtime, is what has to change.
+    if (error instanceof DecisionParseError) {
+      io.err(`patrol: ${error.message}`)
+      return 2
     }
     io.err(`patrol: ${error instanceof Error ? error.message : String(error)}`)
     return 1
