@@ -63,8 +63,7 @@
   轮数计，避免 `roundIntervalMs` 改变后新鲜度漂移。`scripts/policy-audit.mjs` 重放
   `snapshot / added / removed / heartbeat`，一次列出当前停跑行，并额外输出 `stoppedState`；旧日志
   无 `stoppedEvent` 的行仍兼容读取。`stoppedState` 增加两项核对：`heartbeatMatches`（最新心跳
-  指纹与回放集合是否一致）与 `orphanRemovals`（无对应加入行的移除，提示日志被轮转或截断）。行级事件另带 `stoppedSince`（本进程首见停跑时刻），供回答
-  「这行停了多久」；重启后快照会把存活行重基到快照时刻，故它是下界而非历史真值。
+  指纹与回放集合是否一致）与 `orphanRemovals`（无对应加入行的移除，提示日志被轮转或截断）。行级事件另带 `stoppedSince`（本进程首见停跑时刻）：真实停跑时刻不晚于它，故该字段是起点的上界、由它算出的停跑时长是下界；重启会把该值重基到较晚的快照时刻，`scripts/policy-audit.mjs` 须在同一份日志里对同一行保留更早的值（`earliestSince` 跨 snapshot 轮保留，仅 `removed` / `added` 重置），否则停跑时长被低估。首轮即使停跑集合为空也写一条集合级 `snapshot` 标记（`triggerId=stopped-set`、`stoppedCount=0`）：重启后没有停跑行时，这条空快照是审计清掉上一进程遗留停跑行的唯一依据，不留痕回放就永远留着旧行，且该标记本身不计作停跑行。
 - `DirectionPolicy.refuseAction()` 接受来自 `动作类型` 列的仓内 kind：列值没有命中词（`matched` 为空）
   仍然放行，但要求 `source='column'` 且 `field='动作类型'` 且 `evidence` 非空；声称来自列却不带内容的事实
   仍是 `action-unclear`。词表推的 `repo-code` 缺 `matched` 依旧被拒。

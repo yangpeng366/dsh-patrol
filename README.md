@@ -293,9 +293,10 @@ JSONL file — one line per decision, UTF-8 without BOM, append-only:
 
 Each line carries `ts`, `roundId`, `verdict`, `reason`, `threadKey`, `triggerId`, `evalId`,
 `recordId` and the row's own `intervalMin` (with `0` meaning 停跑), `ticketId` (when a Ticket was
-opened) and `wouldAccept` (when an accept was held back for review). The `heartbeat` line is the
-one exception: it is set-level, so it has `ts` / `roundId` / `verdict` / `reason` plus the aggregate
-count and fingerprint, but no single row's `recordId` or `intervalMin`:
+opened) and `wouldAccept` (when an accept was held back for review). Set-level lines are the
+exception — the first-round `snapshot` marker and the periodic `heartbeat` carry `ts` / `roundId` /
+`verdict` / `reason` plus the aggregate `stoppedCount` and `stoppedFingerprint`, but no single row's
+`recordId` or `intervalMin`:
 
 A `stopped` line carries `stoppedEvent` and the set's `stoppedCount` / `stoppedFingerprint` too.
 The fingerprint is SHA-256 over rows sorted by `recordId`, each contributing `recordId` +
@@ -308,17 +309,24 @@ The fingerprint is SHA-256 over rows sorted by `recordId`, each contributing `re
 
 A `stopped` line is a row-state event, not a per-round verdict:
 
-- `snapshot`: the first round of this Engine writes every currently stopped row, one line each.
+- `snapshot`: the first round of this Engine writes one set-level marker (`triggerId=stopped-set`,
+  `stoppedCount` = the set size) plus one line per currently stopped row.
 - `added`: one row entered the stopped set (`巡检间隔` became `0`/blank).
 - `removed`: one row left the stopped set and resumed a running interval; this line names the row
   that resumed, so audit does not list it as currently stopped.
 - `heartbeat`: the set did not change and the heartbeat period elapsed; one summary line carries
   `stoppedCount` and `stoppedFingerprint` instead of 66 repeated row lines.
 
-Every row line also carries `stoppedSince`: when this process first saw the row stopped. It is a
-lower bound — a restart cannot see what happened while it was down, so the new snapshot rebases
-each surviving row to the snapshot time. Between restarts it is stable, which is what answers
-"how long has this row been parked". A row that stops, resumes and stops again gets a new
+The set-level `snapshot` marker is written even when the stopped set is empty: after a restart with
+nothing stopped, that count-0 line is the only signal that lets the audit replay clear rows an
+earlier process had left stopped, instead of keeping them forever.
+
+Every row line also carries `stoppedSince`: when this process first saw the row stopped. The true
+stop is no later than this, so the field is an **upper bound** on the start instant and the parked
+duration derived from it (`now - stoppedSince`) is a **lower bound**; a restart rebases the value to
+the later snapshot clock, so the audit keeps the earlier `stoppedSince` seen for the same row in the
+same log rather than letting the duration shrink. Between restarts it is stable, which is what
+answers "how long has this row been parked". A row that stops, resumes and stops again gets a new
 `stoppedSince` on the second `added` line; the earlier `removed` line keeps the first interval.
 
 The literal `verdict: "stopped"` and `reason: "schedule-stopped"` are unchanged, and the Policy

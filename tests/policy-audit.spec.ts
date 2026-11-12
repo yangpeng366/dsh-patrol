@@ -118,6 +118,53 @@ describe('policy-audit', () => {
     expect(audit.stopped.map((entry) => entry.stoppedSince)).toEqual(['2026-11-09T20:00:00.000Z', null])
   })
 
+  it('clears stale rows when a restart snapshots an empty set, without counting the marker', () => {
+    const snapshotRow = (recordId: string) => ({
+      ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped',
+      stoppedEvent: 'snapshot', stoppedCount: 2, stoppedFingerprint: 'old',
+      threadKey: `patrol:${recordId}`, recordId, intervalMin: 0, triggerId: `trg_${recordId}`, evalId: `eval_${recordId}`,
+    })
+    const emptyMarker = {
+      ts: '2026-11-10T05:00:00.000Z', roundId: 'rnd_2', verdict: 'stopped', reason: 'schedule-stopped',
+      stoppedEvent: 'snapshot', stoppedCount: 0, stoppedFingerprint: 'empty',
+      threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set',
+    }
+
+    // Without the marker, replaying the same append-only log keeps the two old rows forever.
+    const stale = JSON.parse(run(jsonl([snapshotRow('recA'), snapshotRow('recB')]), ['--json']).stdout) as AuditJson
+    expect(stale.stopped.map((entry) => entry.recordId)).toEqual(['recA', 'recB'])
+
+    // The count=0 set-level marker opens a new snapshot round and clears the set; it is not a row.
+    const audit = JSON.parse(run(jsonl([snapshotRow('recA'), snapshotRow('recB'), emptyMarker]), ['--json']).stdout) as AuditJson
+    expect(audit.stopped).toEqual([])
+    expect(audit.stoppedState).toMatchObject({ count: 0, orphanRemovals: 0 })
+  })
+
+  it('keeps the earlier stoppedSince when a restart snapshots the same row again', () => {
+    const marker = (roundId: string, count: number) => ({
+      ts: '2026-11-10T01:00:00.000Z', roundId, verdict: 'stopped', reason: 'schedule-stopped',
+      stoppedEvent: 'snapshot', stoppedCount: count, stoppedFingerprint: 'fp',
+      threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set',
+    })
+    const row = (roundId: string, stoppedSince: string) => ({
+      ts: '2026-11-10T01:00:00.000Z', roundId, verdict: 'stopped', reason: 'schedule-stopped',
+      stoppedEvent: 'snapshot', stoppedCount: 1, stoppedFingerprint: 'fp', stoppedSince,
+      threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA',
+    })
+    const content = jsonl([
+      marker('rnd_1', 1),
+      row('rnd_1', '2026-11-09T20:00:00.000Z'),   // first process: the earlier first-seen time
+      marker('rnd_2', 1),                          // restart opens a new snapshot round
+      row('rnd_2', '2026-11-10T09:00:00.000Z'),   // rebased to the later snapshot clock
+    ])
+
+    const audit = JSON.parse(run(content, ['--json']).stdout) as AuditJson
+    // The two set-level markers are not rows; only recA remains, with the earlier value.
+    expect(audit.stopped).toHaveLength(1)
+    expect(audit.stopped[0]!.recordId).toBe('recA')
+    expect(audit.stopped[0]!.stoppedSince).toBe('2026-11-09T20:00:00.000Z')
+  })
+
   it('flags a removal with no matching row and a heartbeat that disagrees with the replay', () => {
     const content = jsonl([
       { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 1, stoppedFingerprint: 'x', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },

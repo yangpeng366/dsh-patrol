@@ -146,7 +146,7 @@ describe('DecisionLog', () => {
 
     // The engine still reports its decisions; it just has no log to append them to.
     const seen: string[] = []
-    const engine = createEngine(config, { onDecision: (record) => seen.push(record.verdict) })
+    const engine = createEngine(config, { onDecision: (record) => { if (record.triggerId !== 'stopped-set') seen.push(record.verdict) } })
     engine.receive(trigger('trg1'))
     const summary = await engine.runRound(new Date('2026-11-10T01:00:00.000Z'))
     expect(summary.observed).toBe(1)
@@ -164,7 +164,8 @@ describe('Engine + DecisionLog', () => {
     expect(engine.receive(trigger('trg2'))).toBe(true)
 
     const summary = await engine.runRound(new Date('2026-11-10T01:00:00.000Z'))
-    const records = lines(log.path).map((line) => JSON.parse(line) as Record<string, unknown>)
+    // Ignore the first round's set-level snapshot marker: this test is about per-trigger decisions.
+    const records = lines(log.path).map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record['triggerId'] !== 'stopped-set')
 
     expect(records).toHaveLength(2)
     expect(records.map((record) => record['threadKey'])).toEqual(['patrol:rec1', 'patrol:rec1'])
@@ -190,7 +191,7 @@ describe('Engine + DecisionLog', () => {
     engine.receive(fromColumn)
 
     await engine.runRound(new Date('2026-11-10T01:00:00.000Z'))
-    const records = lines(log.path).map((line) => JSON.parse(line) as Record<string, unknown>)
+    const records = lines(log.path).map((line) => JSON.parse(line) as Record<string, unknown>).filter((record) => record['triggerId'] !== 'stopped-set')
     expect(records[0]!['actionSource']).toBe('column')
   })
 })

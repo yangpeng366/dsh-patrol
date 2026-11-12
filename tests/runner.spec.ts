@@ -146,7 +146,13 @@ describe('PatrolRunner', () => {
     expect(summary.tickets).toEqual([])
     expect(dispatcher.seen).toEqual([])
 
-    const records = (await readFile(log.path, 'utf8')).split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Record<string, unknown>)
+    const all = (await readFile(log.path, 'utf8')).split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Record<string, unknown>)
+    // The first round writes one set-level snapshot marker in addition to the per-row lines; keep
+    // row-level and set-level assertions separate.
+    const setLevel = all.filter((record) => record['triggerId'] === 'stopped-set')
+    const records = all.filter((record) => record['triggerId'] !== 'stopped-set')
+    expect(setLevel).toHaveLength(1)
+    expect(setLevel[0]).toMatchObject({ verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 3 })
     // Visibility first: every stopped row has its own record, none was filtered out of the log.
     expect(records).toHaveLength(3)
     expect(records.map((record) => record['recordId'])).toEqual(['rec-stop-1', 'rec-stop-2', 'rec-stop-3'])
@@ -163,8 +169,8 @@ describe('PatrolRunner', () => {
     // The first round wrote the full snapshot; the next unchanged round writes nothing.
     await runner.runOnce()
     const again = (await readFile(log.path, 'utf8')).split('\n').filter((line) => line !== '')
-    // The set did not change and the 12-hour heartbeat is far away: a second round is silent.
-    expect(again).toHaveLength(3)
+    // The first round's marker stays in the file; an unchanged second round adds nothing.
+    expect(again).toHaveLength(4)
     expect(assessments).toBe(0)
   })
 })

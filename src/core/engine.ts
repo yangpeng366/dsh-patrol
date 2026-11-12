@@ -72,7 +72,12 @@ export interface DecisionRecord {
   stoppedCount?: number
   /** Stable digest of the sorted `recordId + intervalMin` set, never of the clock. */
   stoppedFingerprint?: string
-  /** First observation of this stopped row, ISO; a lower bound across process restarts. */
+  /**
+   * When this process first saw the row stopped, ISO. The true stop is no later than this, so the
+   * field is an upper bound on the start instant and `now - stoppedSince` is a lower bound on how
+   * long it has been parked. A restart rebases it to the snapshot clock, so the audit keeps the
+   * earlier value found for the same row in the same log.
+   */
   stoppedSince?: string
   /** Present when the verdict was an accept that was held back for review. */
   wouldAccept?: { title: string; scope: string; rules: string[] }
@@ -317,6 +322,9 @@ export class Engine {
 
     if (!this.stoppedSnapshotDone) {
       this.stoppedSnapshotDone = true
+      // The set-level marker is written even when the set is empty: after a restart with nothing
+      // stopped, the audit must still learn that the old rows are gone.
+      this.emitStoppedHeartbeat(roundId, count, fingerprint, 'snapshot')
       const rows = sortedStoppedRows(current.values())
       for (const row of rows) this.emitStoppedRow(row, 'snapshot', roundId, count, fingerprint)
       this.stoppedRows = current
@@ -375,6 +383,7 @@ export class Engine {
     roundId: string,
     count: number,
     fingerprint: string,
+    event: 'heartbeat' | 'snapshot' = 'heartbeat',
   ): void {
     this.onDecision?.({
       roundId,
@@ -383,7 +392,7 @@ export class Engine {
       triggerId: 'stopped-set',
       verdict: 'stopped',
       reason: 'schedule-stopped',
-      stoppedEvent: 'heartbeat',
+      stoppedEvent: event,
       stoppedCount: count,
       stoppedFingerprint: fingerprint,
     })

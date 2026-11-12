@@ -107,7 +107,7 @@ node src/cli.ts report <id> --stage "已实现" --next "补 CLI 测试" --achiev
 
 ## 7. 实践与调试（实测）
 
-下面八条都是踩过之后才知道的：症状 → 原因 → 对策。只写实测如此的部分，能给的命令都给了。
+下面十一条都是踩过之后才知道的：症状 → 原因 → 对策。只写实测如此的部分，能给的命令都给了。
 
 ### 7.1 动作类型有三条写路径，漏一条闸门就形同虚设
 
@@ -156,6 +156,18 @@ node src/cli.ts report <id> --stage "已实现" --next "补 CLI 测试" --achiev
 - 症状：CI 把「没人动过的文件」判成改动，哈希对不上。
 - 原因：本机 `git config core.autocrlf` 为 `true`，同一文件 Windows 出 CRLF、Linux 出 LF；凡是把文件内容哈希或计字节的产物（如索引）直接算，就会得到两个值。
 - 对策：读入后先 `replace(/\r\n?/g, '\n')` 归一，再算哈希或字节数；不要把行尾当成内容的一部分。
+
+### 7.9 每轮 66 行 stopped 噪声把日志撑爆
+
+- 症状：每轮把 66 条停跑行逐行写成 `stopped`，决策日志被撑爆；原因：停跑被当成每轮重复的判决，不是一个集合的状态；对策：改成集合状态机（`src/core/engine.ts` 的 `recordStoppedSet()`）——首轮 `snapshot` 全量，变更才写 `added` / `removed`，无变化满 `stoppedHeartbeatMs`（默认 12 小时）写一条 `heartbeat`。
+
+### 7.10 进程重启后审计仍列着早已恢复的停跑行
+
+- 症状：行已恢复运行，`policy-audit` 的 `stopped` 列表还挂着它；原因：重启时停跑集合为空就不写 `snapshot`，回放没有新一轮可清场，旧行永远留着；对策：空集合也写一条集合级 `snapshot` 标记（`triggerId=stopped-set`、`stoppedCount=0`），审计靠它换 round 清空集合，且该标记不计作停跑行。
+
+### 7.11 重启把 stoppedSince 推后、停跑时长被低估
+
+- 症状：重启后同一行 `停跑自` 变晚、停跑时长被算短；原因：`stoppedSince` 记本进程首见时刻，真实停跑不晚于它，故字段是上界、由此算的时长是下界，重启把它重基到较晚的快照时刻；对策：`scripts/policy-audit.mjs` 在同一份日志内对同一行保留更早的值（`earliestSince` 跨 snapshot 轮保留，只有 `removed` / `added` 才重置），不要拿清场后已丢失的 `stoppedRows` 去比。
 
 ### 本地自测怎么跑（仓内真实命令）
 

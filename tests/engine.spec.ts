@@ -38,7 +38,8 @@ function engine(options: { mode?: 'off' | 'observe' | 'auto'; collaborate?: stri
     acceptMode: options.mode ?? 'auto',
     now: () => new Date('2026-11-10T01:00:00.000Z'),
     sink: { start: (ticket, assignment) => { started.push({ ticket, assignment }) } },
-    onDecision: (decision) => decisions.push(decision.verdict),
+    // The first round also writes a set-level snapshot marker; these tests count per-trigger verdicts.
+    onDecision: (decision) => { if (decision.triggerId !== 'stopped-set') decisions.push(decision.verdict) },
   })
   return { instance, started, decisions }
 }
@@ -179,7 +180,7 @@ describe('Engine rounds', () => {
       },
       acceptMode: 'observe',
       now: () => new Date('2026-11-10T01:00:00.000Z'),
-      onDecision: (decision) => records.push(decision),
+      onDecision: (decision) => { if (decision.triggerId !== 'stopped-set') records.push(decision) },
     })
     const stoppedRow = trigger('trg-stop', { facts: { authorization: '自主', collaboration: 'sparse', approval: '已通过', priority: 'P1', fake: false, nextStepPresent: true, intervalMin: 0, repoPath: 'D:\\gitAll\\demo' } })
 

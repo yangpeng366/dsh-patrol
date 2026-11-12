@@ -91,6 +91,11 @@ export function auditText(text) {
   // `added` / `removed` apply one row, and `heartbeat` proves the unchanged set is still fresh.
   // Lines written before `stoppedEvent` existed are replayed per round, so the latest round wins.
   const stoppedRows = new Map()
+  // `stoppedSince` is an upper bound on the true start of a stop: a row may have been parked long
+  // before this process first saw it. A restart rebases it to the later snapshot clock, so keep
+  // the earliest value seen for each row within this same log. This map survives the per-round
+  // clear of `stoppedRows`; only a real `removed` or a fresh `added` ends one stop interval.
+  const earliestSince = new Map()
   let stoppedSnapshotRound = null
   let legacyStoppedRound = null
   let lastStoppedEvent = null
@@ -105,6 +110,10 @@ export function auditText(text) {
     if (record.verdict === 'stopped') {
       const event = stoppedEventOf(record)
       const key = stoppedRowKey(record)
+      // A set-level line (triggerId=stopped-set) carries the aggregate, not a row. Its `snapshot`
+      // still opens a new snapshot round (so an empty restart clears stale rows), but neither a
+      // snapshot nor a heartbeat marker is ever counted as a stopped row.
+      const setLevel = record.triggerId === 'stopped-set'
       const entry = {
         line,
         ts: record.ts ?? null,
@@ -118,17 +127,38 @@ export function auditText(text) {
       }
       if (event === 'snapshot') {
         if (stoppedSnapshotRound !== (record.roundId ?? null)) {
+          // A new snapshot round: rows not re-listed are gone. `earliestSince` deliberately stays
+          // so a row that is still stopped keeps its earlier first-seen time across the restart.
           stoppedRows.clear()
           stoppedSnapshotRound = record.roundId ?? null
         }
-        if (key) stoppedRows.set(key, entry)
+        if (key && !setLevel) {
+          const previous = earliestSince.get(key)
+          if (previous && entry.stoppedSince && previous < entry.stoppedSince) {
+            entry.stoppedSince = previous
+          }
+          if (entry.stoppedSince) {
+            const current = earliestSince.get(key)
+            if (!current || entry.stoppedSince < current) earliestSince.set(key, entry.stoppedSince)
+          }
+          stoppedRows.set(key, entry)
+        }
       } else if (event === 'removed') {
         // A removal for a row the replay never saw means the log was rotated or truncated.
         if (key && !stoppedRows.has(key)) orphanRemovals += 1
-        if (key) stoppedRows.delete(key)
+        if (key) {
+          stoppedRows.delete(key)
+          // The stop interval ended; a later `added` must start a new one, not inherit this value.
+          earliestSince.delete(key)
+        }
       } else if (event === 'added') {
-        if (key) stoppedRows.set(key, entry)
-      } else if (event === null && key) {
+        if (key && !setLevel) {
+          // A fresh stop resets the interval instead of inheriting a stale first-seen time.
+          if (entry.stoppedSince) earliestSince.set(key, entry.stoppedSince)
+          else earliestSince.delete(key)
+          stoppedRows.set(key, entry)
+        }
+      } else if (event === null && key && !setLevel) {
         // Legacy logs had no event marker and wrote the whole set every round. Keep the latest
         // round as the current set instead of unioning every historical stopped row.
         const legacyRound = record.roundId ?? null

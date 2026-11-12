@@ -114,7 +114,9 @@ function makeEngine(options: { assessMs?: number } = {}) {
     sink: {
       start: (ticket: Ticket, _assignment: Assignment) => { dispatches.push(ticket.id) },
     },
-    onDecision: (decision) => decisions.push(decision),
+    // The first round also writes a set-level stopped-set snapshot marker; the rehearsal counts
+    // per-row Gate decisions, so leave that bookkeeping line out of `decisions`.
+    onDecision: (decision) => { if (decision.triggerId !== 'stopped-set') decisions.push(decision) },
   })
   return { engine, decisions, windows, dispatches }
 }
