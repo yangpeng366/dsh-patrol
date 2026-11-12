@@ -1,5 +1,9 @@
 # dsh-patrol
 
+[![Release](https://img.shields.io/github/v/release/yangpeng366/dsh-patrol.svg)](https://github.com/yangpeng366/dsh-patrol/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/yangpeng366/dsh-patrol/verify.yml?branch=main)](https://github.com/yangpeng366/dsh-patrol/actions/workflows/verify.yml)
+[![npm](https://img.shields.io/badge/npm-0.1.0-blue)](https://github.com/yangpeng366/dsh-patrol/releases/tag/v0.1.0)
+
 A DeepSeek Harness plugin that turns a **row-based task source** — a 项目方向表 (project direction
 table) in 飞书多维表格 (Feishu Bitable) by default, or a local JSON file — into DSH-native work:
 read the table, turn each due row into a Trigger, admit it under a versioned Policy, open a Ticket

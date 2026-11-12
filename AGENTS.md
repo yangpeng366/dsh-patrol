@@ -104,3 +104,69 @@ node src/cli.ts report <id> --stage "已实现" --next "补 CLI 测试" --achiev
 | 0 | 成功 |
 | 2 | 参数、配置或行不存在：未知命令、缺值、未知数据源 / 身份、未知动作类型、找不到该 id、未给命令 |
 | 1 | 运行期失败（非用法类的异常） |
+
+## 7. 实践与调试（实测）
+
+下面八条都是踩过之后才知道的：症状 → 原因 → 对策。只写实测如此的部分，能给的命令都给了。
+
+### 7.1 动作类型有三条写路径，漏一条闸门就形同虚设
+
+- 症状：CLI 拒绝 `--action-type auto`（exit 2），本地 JSON 源却照写进去，下一轮读成 `invalid`。
+- 原因：写「动作类型」的路径有三条——`patrol report --action-type`（`src/cli.ts`）、`BitableSource.writeBack()`（`src/source/bitable.ts`）、`LocalJsonFileSource.writeBack()`（`src/source/local-json.ts`）；只在一条上校验，另两条就是后门。
+- 对策：三条都调 `writeActionCell()`（`src/core/action-vocabulary.ts`），校验先于任何字段变更；新增写路径必须挂同一个闸门，不要复制校验。
+
+### 7.2 列豁免只认标签不认内容，非法值会穿合法 kind 的衣服
+
+- 症状：手工构造 `{ kind: 'repo-code', source: 'column', field: '动作类型', evidence: 'auto' }` 能过闸。
+- 原因：结构化列没有词表命中（`matched` 为空），闸门为它开了豁免；若只看 `source` / `field` 两个标签，豁免就成了免检章。
+- 对策：豁免必须自证——`normalizeActionKind(fact.evidence) === fact.kind`（`src/core/policy.ts` 的 `refuseAction()`）；证据读不成同一个 kind 就按 `action-unclear` 拒绝。
+
+### 7.3 容错边界很窄：只 trim + 大小写折叠
+
+- 症状：`repo_code`、`repo code`、全角连字符的写法一律 `invalid` 并被拒；被 NBSP 包着的值却能救回。
+- 原因：`readActionCell()` 只做 `trim()` + `toLowerCase()`，fail-closed 是有意的：放宽一步，打错的字就会被重新读成 `repo-code`。
+- 对策：不要「顺手」加别名表或分隔符归一；要支持新写法，先分清它是词表新值还是 typo。
+
+### 7.4 evidence 必须记原文
+
+- 症状：单元格写 `AUTO`，日志里记 `auto`，`reason` 与 `evidence` 自相矛盾。
+- 原因：`evidence` 若取折叠后的 `value`，证据就不再是「表里写了什么」。
+- 对策：`evidence` 取 `cell.raw.trim()`（`inspectAction()`，`src/core/action-facts.ts`），只有 kind 用折叠值；被归一化过的列值在 `reason` 里另写「已归一化为 X」。
+
+### 7.5 词表加第 10 种，LEXICON 不会提醒
+
+- 症状：`ACTION_KINDS` 加了新值，编译通过，却没有任何一行能被推断成它。
+- 原因：`LEXICON` 的类型是 `Exclude<ActionKind, 'unclear'>`，新值不写进词表也满足类型；没有词、没有优先级，它就永远不出现在结果里。
+- 对策：靠导出的 `LEXICON_KINDS` 与 `tests/action-vocabulary.spec.ts` 的断言守住（须与 `ACTION_KINDS` 去掉 `unclear` 后逐项相等）；改词表同时补 `action-facts.ts` 的 `REFUSALS`。
+
+### 7.6 发布物会与代码脱节
+
+- 症状：CI 绿，`node scripts/release-check.mjs` 红。
+- 原因：改了计数口径（四态 / `invalid_action` / `source-column`）却没同步 `docs/policy-v4-triage.md` 的 `triage-action` 块；`scripts/policy-triage-check.mjs` 用同一份模块重算后逐项比对。
+- 对策：改口径必同步 doc 块，提交前跑 `node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md`。
+
+### 7.7 打包内容由 package.json 的 files 决定
+
+- 症状：本地能跑，装了插件的人报缺文件（曾漏过 `prompts/`）。
+- 原因：`files` 只列了 `lib` / `cordis.patch.yml` / `README.md` / `CHANGELOG.md` / `docs` / `skills` / `prompts`；新增运行时文件没加进去，就不会进 tarball。
+- 对策：新增运行时文件同时改 `package.json` 的 `files` 与 `scripts/release-check.mjs` 的 `REQUIRED_ENTRIES`（现为 9 项，含 `package/prompts/decide-next-action.md`）。
+
+### 7.8 跨平台换行：先归一再哈希 / 计字节
+
+- 症状：CI 把「没人动过的文件」判成改动，哈希对不上。
+- 原因：本机 `git config core.autocrlf` 为 `true`，同一文件 Windows 出 CRLF、Linux 出 LF；凡是把文件内容哈希或计字节的产物（如索引）直接算，就会得到两个值。
+- 对策：读入后先 `replace(/\r\n?/g, '\n')` 归一，再算哈希或字节数；不要把行尾当成内容的一部分。
+
+### 本地自测怎么跑（仓内真实命令）
+
+Node ≥ 22.19，源码可直接跑（`node src/cli.ts`）。提交前四条要全绿，改口径或查日志时再跑后三条：
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+node scripts/release-check.mjs
+node scripts/policy-triage-check.mjs --doc docs/policy-v4-triage.md
+node scripts/policy-audit.mjs --file .artifacts/patrol-decisions-20261110.jsonl --json
+node src/cli.ts report <id> --stage "已实现" --action-type auto --source local-json --tasks-file <path>   # 预期 exit 2，文件不变
+```
