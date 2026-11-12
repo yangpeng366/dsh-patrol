@@ -62,7 +62,8 @@
   `stoppedCount` 与按 `recordId` 排序的 `recordId + intervalMin` SHA-256 指纹。心跳按真实时间而非
   轮数计，避免 `roundIntervalMs` 改变后新鲜度漂移。`scripts/policy-audit.mjs` 重放
   `snapshot / added / removed / heartbeat`，一次列出当前停跑行，并额外输出 `stoppedState`；旧日志
-  无 `stoppedEvent` 的行仍兼容读取。行级事件另带 `stoppedSince`（本进程首见停跑时刻），供回答
+  无 `stoppedEvent` 的行仍兼容读取。`stoppedState` 增加两项核对：`heartbeatMatches`（最新心跳
+  指纹与回放集合是否一致）与 `orphanRemovals`（无对应加入行的移除，提示日志被轮转或截断）。行级事件另带 `stoppedSince`（本进程首见停跑时刻），供回答
   「这行停了多久」；重启后快照会把存活行重基到快照时刻，故它是下界而非历史真值。
 - `DirectionPolicy.refuseAction()` 接受来自 `动作类型` 列的仓内 kind：列值没有命中词（`matched` 为空）
   仍然放行，但要求 `source='column'` 且 `field='动作类型'` 且 `evidence` 非空；声称来自列却不带内容的事实

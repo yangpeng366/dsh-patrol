@@ -378,7 +378,9 @@ stopped set: count=1 fingerprint=<sha256> lastEvent=snapshot
 `--json` emits the same thing as one object (`total`, `badLines`, `verdicts`, `reasons`,
 `wouldAccept`, `stopped`, `stoppedState`). `stopped` is the replayed current state, not every
 historical line; `stoppedState` carries the count, recomputed fingerprint, last event and last
-heartbeat. `verdicts.stopped` still counts raw log lines, so read `stopped` / `stoppedState` for
+heartbeat, plus two consistency checks: `heartbeatMatches` (does the newest heartbeat's digest
+equal the replayed set; `null` when a later delta moved the set) and `orphanRemovals` (a
+`removed` line whose row the replay never saw, i.e. the log was rotated or truncated). `verdicts.stopped` still counts raw log lines, so read `stopped` / `stoppedState` for
 "how many rows are stopped now" and use the verdict count only as log-volume history.
 
 Four rules the implementation keeps:

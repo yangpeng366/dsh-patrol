@@ -8,6 +8,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+
+/** The digest the engine writes: rows sorted, each `recordId\0intervalMin`, joined by newlines. */
+function fingerprintOf(rows: { recordId: string; intervalMin: number }[]): string {
+  const material = [...rows]
+    .map((row) => `${row.recordId}\u0000${row.intervalMin}`)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .join('\n')
+  return createHash('sha256').update(material).digest('hex')
+}
 
 const script = fileURLToPath(new URL('../scripts/policy-audit.mjs', import.meta.url))
 
@@ -19,7 +29,7 @@ interface AuditJson {
   reasons: Record<string, number>
   wouldAccept: { line: number; threadKey: string | null; title: string | null; scope: string | null; rules: string[]; reason: string }[]
   stopped: { line: number; recordId: string | null; intervalMin: number | null; stoppedSince: string | null; reason: string }[]
-  stoppedState: { count: number; fingerprint: string; lastEvent: string | null }
+  stoppedState: { count: number; fingerprint: string; lastEvent: string | null; heartbeatMatches: boolean | null; orphanRemovals: number }
 }
 
 function jsonl(lines: (object | string)[]): string {
@@ -92,19 +102,35 @@ describe('policy-audit', () => {
   })
 
   it('replays snapshot, deltas and heartbeat into the current stopped rows', () => {
+    const current = fingerprintOf([{ recordId: 'recA', intervalMin: 0 }, { recordId: 'recC', intervalMin: 0 }])
     const content = jsonl([
       { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 2, stoppedFingerprint: 'old', stoppedSince: '2026-11-09T20:00:00.000Z', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },
       { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 2, stoppedFingerprint: 'old', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
       { ts: '2026-11-10T02:00:00.000Z', roundId: 'rnd_2', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'removed', stoppedCount: 1, stoppedFingerprint: 'middle', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
-      { ts: '2026-11-10T03:00:00.000Z', roundId: 'rnd_3', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'added', stoppedCount: 2, stoppedFingerprint: 'current', threadKey: 'patrol:recC', recordId: 'recC', intervalMin: 0, triggerId: 'trgC', evalId: 'evalC' },
-      { ts: '2026-11-10T04:00:00.000Z', roundId: 'rnd_4', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'heartbeat', stoppedCount: 2, stoppedFingerprint: 'current', threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set' },
+      { ts: '2026-11-10T03:00:00.000Z', roundId: 'rnd_3', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'added', stoppedCount: 2, stoppedFingerprint: current, threadKey: 'patrol:recC', recordId: 'recC', intervalMin: 0, triggerId: 'trgC', evalId: 'evalC' },
+      { ts: '2026-11-10T04:00:00.000Z', roundId: 'rnd_4', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'heartbeat', stoppedCount: 2, stoppedFingerprint: current, threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set' },
     ])
 
     const audit = JSON.parse(run(content, ['--json']).stdout) as AuditJson
     expect(audit.stopped.map((entry) => entry.recordId)).toEqual(['recA', 'recC'])
-    expect(audit.stoppedState).toMatchObject({ count: 2, lastEvent: 'heartbeat' })
+    expect(audit.stoppedState).toMatchObject({ count: 2, lastEvent: 'heartbeat', heartbeatMatches: true, orphanRemovals: 0 })
     // First-seen time survives replay; a line without it reports null rather than guessing.
     expect(audit.stopped.map((entry) => entry.stoppedSince)).toEqual(['2026-11-09T20:00:00.000Z', null])
+  })
+
+  it('flags a removal with no matching row and a heartbeat that disagrees with the replay', () => {
+    const content = jsonl([
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 1, stoppedFingerprint: 'x', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },
+      // The log was rotated or truncated: recB was never seen as stopped.
+      { ts: '2026-11-10T02:00:00.000Z', roundId: 'rnd_2', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'removed', stoppedCount: 1, stoppedFingerprint: 'x', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
+      // A stale heartbeat: its digest names a set the replayed lines no longer describe.
+      { ts: '2026-11-10T04:00:00.000Z', roundId: 'rnd_3', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'heartbeat', stoppedCount: 3, stoppedFingerprint: 'stale', threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set' },
+    ])
+
+    const audit = JSON.parse(run(content, ['--json']).stdout) as AuditJson
+    expect(audit.stoppedState.orphanRemovals).toBe(1)
+    expect(audit.stoppedState.heartbeatMatches).toBe(false)
+    expect(audit.stopped.map((entry) => entry.recordId)).toEqual(['recA'])
   })
 
   it('uses the latest legacy round as the current stopped set', () => {

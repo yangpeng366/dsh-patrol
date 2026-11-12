@@ -96,6 +96,7 @@ export function auditText(text) {
   let lastStoppedEvent = null
   let lastStoppedLine = null
   let lastStoppedHeartbeat = null
+  let orphanRemovals = 0
 
   for (const { line, record } of records) {
     verdicts[record.verdict] = (verdicts[record.verdict] ?? 0) + 1
@@ -122,6 +123,8 @@ export function auditText(text) {
         }
         if (key) stoppedRows.set(key, entry)
       } else if (event === 'removed') {
+        // A removal for a row the replay never saw means the log was rotated or truncated.
+        if (key && !stoppedRows.has(key)) orphanRemovals += 1
         if (key) stoppedRows.delete(key)
       } else if (event === 'added') {
         if (key) stoppedRows.set(key, entry)
@@ -173,9 +176,15 @@ export function auditText(text) {
   const stopped = [...stoppedRows.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, entry]) => ({ key, ...entry }))
+  const fingerprint = stoppedFingerprintOf(stoppedRows)
   const stoppedState = {
     count: stopped.length,
-    fingerprint: stoppedFingerprintOf(stoppedRows),
+    fingerprint,
+    // Only meaningful while the heartbeat is the newest stopped event: a later delta moves the set.
+    heartbeatMatches: lastStoppedEvent === 'heartbeat' && lastStoppedHeartbeat?.fingerprint
+      ? fingerprint === lastStoppedHeartbeat.fingerprint
+      : null,
+    orphanRemovals,
     lastEvent: lastStoppedEvent,
     lastLine: lastStoppedLine,
     lastHeartbeat: lastStoppedHeartbeat,
@@ -211,7 +220,7 @@ function formatHuman(file, summary) {
   for (const entry of summary.stopped) {
     out.push(`  #${entry.line} ${entry.ts ?? '(no ts)'} ${entry.recordId ?? '(no recordId)'} 巡检间隔=${entry.intervalMin === null ? '(absent)' : entry.intervalMin} 停跑自=${entry.stoppedSince ?? '(unknown)'} reason=${entry.reason}`)
   }
-  out.push(`stopped set: count=${summary.stoppedState.count} fingerprint=${summary.stoppedState.fingerprint} lastEvent=${summary.stoppedState.lastEvent ?? '(none)'}`)
+  out.push(`stopped set: count=${summary.stoppedState.count} fingerprint=${summary.stoppedState.fingerprint} lastEvent=${summary.stoppedState.lastEvent ?? '(none)'} heartbeatMatches=${summary.stoppedState.heartbeatMatches ?? '(n/a)'} orphanRemovals=${summary.stoppedState.orphanRemovals}`)
   if (summary.badLines.length > 0) {
     out.push('')
     out.push('bad lines (skipped, audit continued):')
