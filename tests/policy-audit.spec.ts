@@ -18,7 +18,8 @@ interface AuditJson {
   verdicts: Record<string, number>
   reasons: Record<string, number>
   wouldAccept: { line: number; threadKey: string | null; title: string | null; scope: string | null; rules: string[]; reason: string }[]
-  stopped: { line: number; recordId: string | null; intervalMin: number | null; reason: string }[]
+  stopped: { line: number; recordId: string | null; intervalMin: number | null; stoppedSince: string | null; reason: string }[]
+  stoppedState: { count: number; fingerprint: string; lastEvent: string | null }
 }
 
 function jsonl(lines: (object | string)[]): string {
@@ -70,7 +71,7 @@ describe('policy-audit', () => {
   it('lists stopped rows by record id and the interval the table wrote', () => {
     const content = jsonl([
       FILE_UNDER_TEST[0]!,
-      // Written by `Engine.recordStopped()`: a row whose 巡检间隔 is 0 never reaches the Gate, but it
+      // Written by `Engine.recordStoppedSet()`: a row whose 巡检间隔 is 0 never reaches the Gate, but it
       // still lands in the log, so "which rows are stopped" is a query, not an archaeology dig.
       { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_20261110T010000Z_1', verdict: 'stopped', reason: 'schedule-stopped', threadKey: 'patrol:recStop', recordId: 'recStop', intervalMin: 0, triggerId: 'trg_recStop_abc', evalId: 'eval_9' },
     ])
@@ -88,6 +89,34 @@ describe('policy-audit', () => {
     expect(human.stdout).toContain('stopped rows (recorded, not dispatched): 1')
     expect(human.stdout).toContain('recStop')
     expect(human.stdout).toContain('巡检间隔=0')
+  })
+
+  it('replays snapshot, deltas and heartbeat into the current stopped rows', () => {
+    const content = jsonl([
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 2, stoppedFingerprint: 'old', stoppedSince: '2026-11-09T20:00:00.000Z', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'snapshot', stoppedCount: 2, stoppedFingerprint: 'old', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
+      { ts: '2026-11-10T02:00:00.000Z', roundId: 'rnd_2', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'removed', stoppedCount: 1, stoppedFingerprint: 'middle', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
+      { ts: '2026-11-10T03:00:00.000Z', roundId: 'rnd_3', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'added', stoppedCount: 2, stoppedFingerprint: 'current', threadKey: 'patrol:recC', recordId: 'recC', intervalMin: 0, triggerId: 'trgC', evalId: 'evalC' },
+      { ts: '2026-11-10T04:00:00.000Z', roundId: 'rnd_4', verdict: 'stopped', reason: 'schedule-stopped', stoppedEvent: 'heartbeat', stoppedCount: 2, stoppedFingerprint: 'current', threadKey: 'stopped-set', triggerId: 'stopped-set', evalId: 'eval_stopped_set' },
+    ])
+
+    const audit = JSON.parse(run(content, ['--json']).stdout) as AuditJson
+    expect(audit.stopped.map((entry) => entry.recordId)).toEqual(['recA', 'recC'])
+    expect(audit.stoppedState).toMatchObject({ count: 2, lastEvent: 'heartbeat' })
+    // First-seen time survives replay; a line without it reports null rather than guessing.
+    expect(audit.stopped.map((entry) => entry.stoppedSince)).toEqual(['2026-11-09T20:00:00.000Z', null])
+  })
+
+  it('uses the latest legacy round as the current stopped set', () => {
+    const content = jsonl([
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },
+      { ts: '2026-11-10T01:00:00.000Z', roundId: 'rnd_1', verdict: 'stopped', reason: 'schedule-stopped', threadKey: 'patrol:recB', recordId: 'recB', intervalMin: 0, triggerId: 'trgB', evalId: 'evalB' },
+      { ts: '2026-11-10T02:00:00.000Z', roundId: 'rnd_2', verdict: 'stopped', reason: 'schedule-stopped', threadKey: 'patrol:recA', recordId: 'recA', intervalMin: 0, triggerId: 'trgA', evalId: 'evalA' },
+    ])
+
+    const audit = JSON.parse(run(content, ['--json']).stdout) as AuditJson
+    expect(audit.stopped.map((entry) => entry.recordId)).toEqual(['recA'])
+    expect(audit.stoppedState).toMatchObject({ count: 1, lastEvent: 'legacy' })
   })
 
   it('reports bad lines with their line numbers and keeps counting the good ones', () => {

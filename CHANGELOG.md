@@ -56,6 +56,14 @@
 
 ### Changed
 
+- 停跑决策日志改为集合状态机：首轮写 `stoppedEvent="snapshot"` 全量（每行仍是 `verdict="stopped"` /
+  `reason="schedule-stopped"`，Policy v4 语义不变），之后只在新增停跑行写 `added`、恢复运行写
+  `removed`、集合不变且达到 `stoppedHeartbeatMs`（默认 12 小时）时写一条 `heartbeat`；每条带
+  `stoppedCount` 与按 `recordId` 排序的 `recordId + intervalMin` SHA-256 指纹。心跳按真实时间而非
+  轮数计，避免 `roundIntervalMs` 改变后新鲜度漂移。`scripts/policy-audit.mjs` 重放
+  `snapshot / added / removed / heartbeat`，一次列出当前停跑行，并额外输出 `stoppedState`；旧日志
+  无 `stoppedEvent` 的行仍兼容读取。行级事件另带 `stoppedSince`（本进程首见停跑时刻），供回答
+  「这行停了多久」；重启后快照会把存活行重基到快照时刻，故它是下界而非历史真值。
 - `DirectionPolicy.refuseAction()` 接受来自 `动作类型` 列的仓内 kind：列值没有命中词（`matched` 为空）
   仍然放行，但要求 `source='column'` 且 `field='动作类型'` 且 `evidence` 非空；声称来自列却不带内容的事实
   仍是 `action-unclear`。词表推的 `repo-code` 缺 `matched` 依旧被拒。
@@ -65,8 +73,8 @@
   `repo-not-cloned` / `repo-not-autonomous`）→ 存在性（`repo-exists-*`）。仍保持 `observe`，没有任何行切到 auto。
 - `itemIsDue()` 不再把 `0`（停跑）当 60 分钟：`interval <= 0` 返回 `false`，停跑行不再每轮进 `runRound()`
   被 Gate 拒一次。可见性没有跟着丢：`PatrolRunner.runOnce()` 把停跑行作为 `stopped` 触发集交给同一轮，
-  `Engine.runRound(now, { stopped })` 为每条写一条 `verdict: "stopped"` / `reason: "schedule-stopped"` 的
-  记录（`recordId` + `intervalMin` 原值，`RoundSummary.stopped` 计数），不调 Assessor、不开 Ticket；
+  `Engine.runRound(now, { stopped })` 把停跑行记成 `verdict: "stopped"` / `reason: "schedule-stopped"`
+  （`recordId` + `intervalMin` 原值，`RoundSummary.stopped` 计数；记录时机见上方状态机），不调 Assessor、不开 Ticket；
   `evaluated` 只数真正判过的行。决策日志行同时新增 `recordId` / `intervalMin`。`Policy.gate()` 语义与
   reason 一字未动。`docs/policy-v4-triage.md` §6.3 / §9.1 记录口径与一轮 78 行实测（66 stopped / 12 进 Gate /
   0 次 Assessment），`scripts/policy-audit.mjs` 新增 `stopped` 列表与计数。

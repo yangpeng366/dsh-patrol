@@ -12,6 +12,22 @@ import type { Policy } from './policy.ts'
 import { itemScope } from '../mapping.ts'
 import { createHash } from 'node:crypto'
 
+/** Why a `stopped` log line exists. Row identity fields stay the same for every event. */
+export type StoppedEvent = 'snapshot' | 'added' | 'removed' | 'heartbeat'
+
+/** Twelve hours: stable wall-clock freshness even when `roundIntervalMs` changes. */
+const DEFAULT_STOPPED_HEARTBEAT_MS = 12 * 60 * 60 * 1000
+
+interface StoppedRowState {
+  /** `recordId` when supplied; the thread key is the stable fallback. */
+  key: string
+  trigger: Trigger
+  recordId?: string
+  intervalMin?: number
+  /** When this process first saw the row stopped; a restart rebases it to the snapshot time. */
+  stoppedSince: string
+}
+
 /** Where a started Assignment goes. */
 export interface AssignmentSink {
   start(ticket: Ticket, assignment: Assignment): void | Promise<void>
@@ -46,6 +62,18 @@ export interface DecisionRecord {
    * reading of it: a `stopped` record says `0` here, a running row says its real interval.
    */
   intervalMin?: number
+  /**
+   * A `stopped` line is either a row-state event or the periodic set heartbeat. `removed`
+   * means the row left the stopped set; the verdict still names the state family the line is
+   * about, while `recordId` names the row that resumed.
+   */
+  stoppedEvent?: StoppedEvent
+  /** Number of rows in the stopped set after this event. */
+  stoppedCount?: number
+  /** Stable digest of the sorted `recordId + intervalMin` set, never of the clock. */
+  stoppedFingerprint?: string
+  /** First observation of this stopped row, ISO; a lower bound across process restarts. */
+  stoppedSince?: string
   /** Present when the verdict was an accept that was held back for review. */
   wouldAccept?: { title: string; scope: string; rules: string[] }
   ticketId?: string
@@ -70,7 +98,7 @@ export interface RoundSummary {
   observed: number
   ignored: number
   unavailable: number
-  /** Rows recorded as `stopped` this round: visible in the log, never assessed, never dispatched. */
+  /** Rows whose schedule is stopped this round: visible, never assessed, never dispatched. */
   stopped: number
   tickets: string[]
 }
@@ -82,6 +110,8 @@ export interface EngineOptions {
   acceptMode?: AcceptMode
   /** Clock, injectable for tests. */
   now?: () => Date
+  /** How often an unchanged stopped set gets one heartbeat line. Defaults to 12 hours. */
+  stoppedHeartbeatMs?: number
   sink?: AssignmentSink
   onDecision?: (decision: DecisionRecord) => void
 }
@@ -95,7 +125,11 @@ export class Engine {
   private readonly assessor: Assessor
   private readonly acceptMode: AcceptMode
   private readonly now: () => Date
+  private readonly stoppedHeartbeatMs: number
   private readonly sink: AssignmentSink | undefined
+  private stoppedRows = new Map<string, StoppedRowState>()
+  private stoppedSnapshotDone = false
+  private stoppedHeartbeatAt = 0
   private readonly onDecision: ((decision: DecisionRecord) => void) | undefined
   /** Counts rounds, so two rounds inside the same millisecond still get distinct ids. */
   private rounds = 0
@@ -105,6 +139,7 @@ export class Engine {
     this.assessor = options.assessor
     this.acceptMode = options.acceptMode ?? 'auto'
     this.now = options.now ?? (() => new Date())
+    this.stoppedHeartbeatMs = options.stoppedHeartbeatMs ?? DEFAULT_STOPPED_HEARTBEAT_MS
     this.sink = options.sink
     this.onDecision = options.onDecision
   }
@@ -157,12 +192,7 @@ export class Engine {
   async runRound(now: Date = this.now(), input: RoundInput = {}): Promise<RoundSummary> {
     const roundId = this.nextRoundId(now)
     const summary: RoundSummary = { roundId, evaluated: 0, admitted: 0, observed: 0, ignored: 0, unavailable: 0, stopped: 0, tickets: [] }
-    const recorded = new Set<string>()
-    for (const trigger of input.stopped ?? []) {
-      if (recorded.has(trigger.id)) continue
-      recorded.add(trigger.id)
-      this.recordStopped(trigger, roundId, summary)
-    }
+    this.recordStoppedSet(now, roundId, input.stopped ?? [], summary)
     for (const trigger of this.pending()) {
       // Another round may have judged this Trigger while this one awaited the Assessor. Its
       // disposition is the record then; judging it again would open a second line of work.
@@ -268,25 +298,94 @@ export class Engine {
   }
 
   /**
-   * Records a row the round deliberately did not judge because its schedule is stopped.
-   *
-   * The reason stays the Policy's own word (`schedule-stopped`) so an audit can still answer "this
-   * row is not supposed to produce work" with one string, but the verdict is `stopped` rather than
-   * `ignored`: nothing was refused this round, the row was not on the roster at all. `evaluated`
-   * does not move — no Gate ran, no Assessor was called, nothing was spent.
+   * Records the stopped set as a small state machine: a full snapshot on the first round, then
+   * one line per added/removed row, and one heartbeat while the set is unchanged. Every line keeps
+   * the Policy's own `schedule-stopped` reason; no Gate, Assessor or Ticket is involved.
    */
-  private recordStopped(trigger: Trigger, roundId: string, summary: RoundSummary): void {
-    this.dispositions.set(trigger.id, { state: 'evaluated', decision: 'stopped' })
-    summary.stopped += 1
+  private recordStoppedSet(now: Date, roundId: string, triggers: readonly Trigger[], summary: RoundSummary): void {
+    const current = new Map<string, StoppedRowState>()
+    for (const trigger of triggers) {
+      const row = this.stoppedStateOf(trigger, now)
+      current.set(row.key, row)
+    }
+    const count = current.size
+    const fingerprint = stoppedFingerprintOf(current.values())
+    summary.stopped = count
+    for (const row of current.values()) {
+      this.dispositions.set(row.trigger.id, { state: 'evaluated', decision: 'stopped' })
+    }
+
+    if (!this.stoppedSnapshotDone) {
+      this.stoppedSnapshotDone = true
+      const rows = sortedStoppedRows(current.values())
+      for (const row of rows) this.emitStoppedRow(row, 'snapshot', roundId, count, fingerprint)
+      this.stoppedRows = current
+      this.stoppedHeartbeatAt = now.getTime()
+      return
+    }
+
+    const added = sortedStoppedRows([...current.values()].filter((row) => !this.stoppedRows.has(row.key)))
+    const removed = sortedStoppedRows([...this.stoppedRows.values()].filter((row) => !current.has(row.key)))
+    this.stoppedRows = current
+    if (added.length > 0 || removed.length > 0) {
+      for (const row of added) this.emitStoppedRow(row, 'added', roundId, count, fingerprint)
+      for (const row of removed) this.emitStoppedRow(row, 'removed', roundId, count, fingerprint)
+      this.stoppedHeartbeatAt = now.getTime()
+      return
+    }
+
+    if (count > 0 && now.getTime() - this.stoppedHeartbeatAt >= this.stoppedHeartbeatMs) {
+      this.emitStoppedHeartbeat(roundId, count, fingerprint)
+      this.stoppedHeartbeatAt = now.getTime()
+    }
+  }
+
+  /** A row already in the set keeps its first-seen time; a new one starts at this round. */
+  private stoppedStateOf(trigger: Trigger, now: Date): StoppedRowState {
+    const row = this.rowOf(trigger)
+    const key = row.recordId ?? trigger.threadKey
+    const stoppedSince = this.stoppedRows.get(key)?.stoppedSince ?? now.toISOString()
+    return { key, trigger, ...row, stoppedSince }
+  }
+
+  private emitStoppedRow(
+    row: StoppedRowState,
+    event: Exclude<StoppedEvent, 'heartbeat'>,
+    roundId: string,
+    count: number,
+    fingerprint: string,
+  ): void {
     this.onDecision?.({
       roundId,
-      evalId: evalIdOf(trigger.id),
-      threadKey: trigger.threadKey,
-      triggerId: trigger.id,
+      evalId: evalIdOf(row.trigger.id),
+      threadKey: row.trigger.threadKey,
+      triggerId: row.trigger.id,
       verdict: 'stopped',
       reason: 'schedule-stopped',
-      actionSource: actionSourceOf(trigger),
-      ...this.rowOf(trigger),
+      actionSource: actionSourceOf(row.trigger),
+      ...this.rowOf(row.trigger),
+      stoppedEvent: event,
+      stoppedCount: count,
+      stoppedFingerprint: fingerprint,
+      stoppedSince: row.stoppedSince,
+    })
+  }
+
+  private emitStoppedHeartbeat(
+    roundId: string,
+    count: number,
+    fingerprint: string,
+  ): void {
+    this.onDecision?.({
+      roundId,
+      evalId: 'eval_stopped_set',
+      threadKey: 'stopped-set',
+      triggerId: 'stopped-set',
+      verdict: 'stopped',
+      reason: 'schedule-stopped',
+      stoppedEvent: 'heartbeat',
+      stoppedCount: count,
+      stoppedFingerprint: fingerprint,
     })
   }
 
@@ -350,6 +449,18 @@ function actionSourceOf(trigger: Trigger): ActionSource | undefined {
   const facts = trigger.meta['facts'] as { actionFacts?: { source?: ActionSource } } | undefined
   const direct = trigger.meta['actionFacts'] as { source?: ActionSource } | undefined
   return facts?.actionFacts?.source ?? direct?.source
+}
+
+/** Stable order for log lines and the digest: row identity, never input order or wall-clock time. */
+function sortedStoppedRows(rows: Iterable<StoppedRowState>): StoppedRowState[] {
+  return [...rows].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+}
+
+function stoppedFingerprintOf(rows: Iterable<StoppedRowState>): string {
+  const material = sortedStoppedRows(rows)
+    .map((row) => `${row.key}\u0000${row.intervalMin ?? ''}`)
+    .join('\n')
+  return createHash('sha256').update(material).digest('hex')
 }
 
 /** One row's Evaluation id: derived from the Trigger id, so a re-judged row keeps its name. */

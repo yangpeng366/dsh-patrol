@@ -31,6 +31,14 @@ export interface DecisionLogEntry {
   recordId?: string
   /** The row's `巡检间隔(分钟)` as the source wrote it, `0` meaning 停跑. Absent on old lines. */
   intervalMin?: number
+  /** `snapshot` / `added` / `removed` / `heartbeat`; absent on legacy stopped lines. */
+  stoppedEvent?: DecisionRecord['stoppedEvent']
+  /** Rows in the stopped set after the event. */
+  stoppedCount?: number
+  /** Stable digest of the sorted `recordId + intervalMin` set. */
+  stoppedFingerprint?: string
+  /** First observation of this stopped row, ISO; absent on legacy stopped lines. */
+  stoppedSince?: string
   /** Present when the verdict was an accept held back for review (`observe` / `off`). */
   wouldAccept?: { title: string; scope: string; rules: string[] }
   triggerId: string
@@ -81,6 +89,10 @@ export function toDecisionLogEntry(decision: DecisionRecord, ts: Date): Decision
   if (decision.actionSource) entry.actionSource = decision.actionSource
   if (decision.recordId) entry.recordId = decision.recordId
   if (decision.intervalMin !== undefined) entry.intervalMin = decision.intervalMin
+  if (decision.stoppedEvent) entry.stoppedEvent = decision.stoppedEvent
+  if (decision.stoppedCount !== undefined) entry.stoppedCount = decision.stoppedCount
+  if (decision.stoppedFingerprint) entry.stoppedFingerprint = decision.stoppedFingerprint
+  if (decision.stoppedSince) entry.stoppedSince = decision.stoppedSince
   if (decision.wouldAccept) entry.wouldAccept = decision.wouldAccept
   if (decision.ticketId) entry.ticketId = decision.ticketId
   return entry

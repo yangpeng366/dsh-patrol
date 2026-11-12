@@ -10,6 +10,7 @@ describe('Patrol Config policy defaults', () => {
     expect(config.policyVersion).toBe('v4')
     expect(config.autonomousRepos).toEqual([])
     expect(config.allowAnyRepo).toBe(false)
+    expect(config.stoppedHeartbeatMs).toBe(12 * 60 * 60 * 1000)
   })
 
   it('keeps the opt-in explicit rather than deriving it from a configured allowlist', () => {

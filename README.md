@@ -102,6 +102,7 @@ minimal config and the uninstall steps are in [Install & configure](#install--co
 | `paused` | `false` | a paused Policy admits nothing but keeps its rules |
 | `acceptMode` | `observe` | `off` / `observe` / `auto` |
 | `decisionLogPath` | — (off) | append-only JSONL of every decision; relative paths resolve against the process working directory |
+| `stoppedHeartbeatMs` | `43200000` (12h) | while the stopped set is unchanged, write one summary line this often; `snapshot` / `added` / `removed` lines are written immediately |
 | `autonomousRepos` | `[]` | repo prefixes an unattended round may act inside; **empty refuses every row** (`repo-allowlist-unset`), and once set a row with no repo, an uncloned repo, or a repo outside every prefix is refused |
 | `allowAnyRepo` | `false` | explicit opt-in to the pre-v3 "any repo" rule, for tests and interactive callers only; never inferred from an empty `autonomousRepos` |
 | `roundIntervalMs` | `600000` | how often a round runs |
@@ -292,16 +293,50 @@ JSONL file — one line per decision, UTF-8 without BOM, append-only:
 
 Each line carries `ts`, `roundId`, `verdict`, `reason`, `threadKey`, `triggerId`, `evalId`,
 `recordId` and the row's own `intervalMin` (with `0` meaning 停跑), `ticketId` (when a Ticket was
-opened) and `wouldAccept` (when an accept was held back for review):
+opened) and `wouldAccept` (when an accept was held back for review). The `heartbeat` line is the
+one exception: it is set-level, so it has `ts` / `roundId` / `verdict` / `reason` plus the aggregate
+count and fingerprint, but no single row's `recordId` or `intervalMin`:
+
+A `stopped` line carries `stoppedEvent` and the set's `stoppedCount` / `stoppedFingerprint` too.
+The fingerprint is SHA-256 over rows sorted by `recordId`, each contributing `recordId` +
+`intervalMin`; it never includes a timestamp:
 
 ```json
 {"ts":"2026-11-10T14:33:42.920Z","roundId":"rnd_20261110T010000Z_1","verdict":"observed","reason":"held-by-mode:observe","threadKey":"patrol:rec1","recordId":"rec1","intervalMin":60,"triggerId":"rec1","evalId":"eval_3ff45714ea4c","wouldAccept":{"title":"补齐审计脚本","scope":"D:\\gitAll\\demo","rules":["next-step-present"]}}
-{"ts":"2026-11-10T14:33:42.921Z","roundId":"rnd_20261110T010000Z_1","verdict":"stopped","reason":"schedule-stopped","threadKey":"patrol:recStop","recordId":"recStop","intervalMin":0,"triggerId":"trg_recStop_3b1c","evalId":"eval_9f2a0d51c7be"}
+{"ts":"2026-11-10T14:33:42.921Z","roundId":"rnd_20261110T010000Z_1","verdict":"stopped","reason":"schedule-stopped","threadKey":"patrol:recStop","recordId":"recStop","intervalMin":0,"triggerId":"trg_recStop_3b1c","evalId":"eval_9f2a0d51c7be","stoppedEvent":"snapshot","stoppedCount":1,"stoppedFingerprint":"<sha256>","stoppedSince":"2026-11-10T14:33:42.921Z"}
 ```
 
-A `stopped` line is a row whose schedule is stopped: it was not judged, nothing was assessed, nothing
-was dispatched — but it is in the log, so "which rows are stopped, and why did nothing run" stays a
-query instead of a memory.
+A `stopped` line is a row-state event, not a per-round verdict:
+
+- `snapshot`: the first round of this Engine writes every currently stopped row, one line each.
+- `added`: one row entered the stopped set (`巡检间隔` became `0`/blank).
+- `removed`: one row left the stopped set and resumed a running interval; this line names the row
+  that resumed, so audit does not list it as currently stopped.
+- `heartbeat`: the set did not change and the heartbeat period elapsed; one summary line carries
+  `stoppedCount` and `stoppedFingerprint` instead of 66 repeated row lines.
+
+Every row line also carries `stoppedSince`: when this process first saw the row stopped. It is a
+lower bound — a restart cannot see what happened while it was down, so the new snapshot rebases
+each surviving row to the snapshot time. Between restarts it is stable, which is what answers
+"how long has this row been parked". A row that stops, resumes and stops again gets a new
+`stoppedSince` on the second `added` line; the earlier `removed` line keeps the first interval.
+
+The literal `verdict: "stopped"` and `reason: "schedule-stopped"` are unchanged, and the Policy
+v4 meaning is unchanged: none of these lines went through the Gate, the Assessor or a Ticket.
+The default heartbeat is **12 hours**, not 12 rounds: `roundIntervalMs` is configurable, so a
+round-based period would drift from two hours to several days. Override it with
+`stoppedHeartbeatMs` when a shorter freshness bound is needed.
+
+**How instant answerability survives convergence:** `policy-audit` replays the state machine in
+file order — `snapshot` resets the set, `added` / `removed` apply one row, `heartbeat` leaves it
+unchanged. Its `stopped` list is therefore the **current** stopped set (not every historical
+line), and one command still answers which rows are stopped and why. A restart writes a new
+snapshot, which also resets stale rows left by a previous process; old logs without
+`stoppedEvent` are grouped by `roundId`, so their latest round still yields the current set.
+
+The `snapshot` / `added` lines represent rows whose schedule is stopped: they were not judged,
+nothing was assessed and nothing was dispatched. The `removed` line closes that state when a row
+resumes; the heartbeat keeps the set's freshness visible without repeating every row.
 
 Reading it back is what turns `observe` mode into a decision (`scripts/policy-audit.mjs` is also
 clone-only, for the same reason):
@@ -336,11 +371,15 @@ would-accept (held for review): 2
       rules: next-step-present
 
 stopped rows (recorded, not dispatched): 1
-  #3 2026-11-10T14:33:42.921Z recStop 巡检间隔=0 reason=schedule-stopped
+  #3 2026-11-10T14:33:42.921Z recStop 巡检间隔=0 停跑自=2026-11-10T14:33:42.921Z reason=schedule-stopped
+stopped set: count=1 fingerprint=<sha256> lastEvent=snapshot
 ```
 
 `--json` emits the same thing as one object (`total`, `badLines`, `verdicts`, `reasons`,
-`wouldAccept`, `stopped`), so a digest job can gate on `wouldAccept.length` instead of grepping text.
+`wouldAccept`, `stopped`, `stoppedState`). `stopped` is the replayed current state, not every
+historical line; `stoppedState` carries the count, recomputed fingerprint, last event and last
+heartbeat. `verdicts.stopped` still counts raw log lines, so read `stopped` / `stoppedState` for
+"how many rows are stopped now" and use the verdict count only as log-volume history.
 
 Four rules the implementation keeps:
 
@@ -483,6 +522,7 @@ below is spelled exactly as in the config schema (line numbers are `src/index.ts
           - 'D:\gitAll\dsh-patrol'
         acceptMode: observe                    # Config.acceptMode      src/index.ts:44
         roundIntervalMs: 600000                # Config.roundIntervalMs src/index.ts:63
+        stoppedHeartbeatMs: 43200000            # unchanged stopped set: one summary line / 12h
 ```
 
 - `kind` / `tasksFile` — the source. `local-json` reads a file holding an array of items, each in
@@ -492,6 +532,8 @@ a row outside every prefix is `repo-not-autonomous`, refused before assessment.
 - `acceptMode: observe` — the default, and where a new install should start: every row is judged,
 what *would* be accepted is recorded, no Ticket opens.
 - `roundIntervalMs` — how often a round runs; the schema's floor is `1000`. `600000` is 10 minutes.
+- `stoppedHeartbeatMs` — how often an unchanged stopped set gets one summary log line; the floor
+  is `1000`. The default `43200000` is 12 hours so freshness does not drift with the round rate.
 
 Worth setting on a first run: `decisionLogPath` (`src/index.ts:49`), which appends one JSONL line
 per decision so an `observe` round can be read back instead of guessed.

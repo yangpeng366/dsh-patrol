@@ -64,6 +64,8 @@ export const Config = z.object({
   allowAnyRepo: z.boolean().default(false),
   /** How often a round runs. */
   roundIntervalMs: z.number().int().min(1_000).default(600_000),
+  /** How often an unchanged stopped set emits one heartbeat. Defaults to 12 hours. */
+  stoppedHeartbeatMs: z.number().int().min(1_000).default(43_200_000),
   /** Where admitted work goes. */
   dispatcher: z.enum(['log', 'codex', 'dsh']).default('log'),
   /** Extra arguments for the `codex` dispatcher. */
@@ -153,6 +155,7 @@ export function createEngine(
     policy,
     assessor: options.assessor ?? defaultAssessor(config.acceptMode),
     acceptMode: config.acceptMode,
+    stoppedHeartbeatMs: config.stoppedHeartbeatMs,
     sink: { start: (ticket, _assignment) => { void dispatcher.dispatch(ticket, { fake: false }) } },
     onDecision: (decision) => {
       options.onDecision?.(decision)

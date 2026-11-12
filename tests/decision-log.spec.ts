@@ -81,7 +81,7 @@ describe('DecisionLog', () => {
     const dir = tempDir()
     const path = join(dir, 'decisions.jsonl')
     const log = new DecisionLog({ path, now: () => new Date('2026-11-10T01:00:00.000Z') })
-    // What `Engine.recordStopped()` emits: a verdict of its own, the Policy's reason, and the two
+    // What `Engine.recordStoppedSet()` emits: a verdict of its own, the Policy's reason, and the two
     // facts an audit needs to answer "which row is stopped, and why did nothing run".
     log.append(decision({
       verdict: 'stopped',

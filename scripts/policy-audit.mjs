@@ -12,6 +12,7 @@
  * A damaged line is reported with its line number and skipped; it never aborts the audit.
  */
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -27,11 +28,32 @@ function preview(raw) {
   return text.length > 120 ? `${text.slice(0, 120)}…` : text
 }
 
+const STOPPED_EVENTS = new Set(['snapshot', 'added', 'removed', 'heartbeat'])
+
+function stoppedEventOf(record) {
+  return typeof record.stoppedEvent === 'string' && STOPPED_EVENTS.has(record.stoppedEvent) ? record.stoppedEvent : null
+}
+
+/** New lines carry `recordId`; legacy rows and synthetic rows fall back to the thread key. */
+function stoppedRowKey(record) {
+  if (typeof record.recordId === 'string' && record.recordId !== '') return record.recordId
+  if (typeof record.threadKey === 'string' && record.threadKey !== '') return record.threadKey
+  return null
+}
+
+function stoppedFingerprintOf(rows) {
+  const material = [...rows.entries()]
+    .map(([key, entry]) => `${key}\u0000${entry.intervalMin ?? ''}`)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .join('\n')
+  return createHash('sha256').update(material).digest('hex')
+}
+
 /**
  * Summarises JSONL text.
  *
  * @param {string} text - File contents, with or without a leading UTF-8 BOM.
- * @returns {{total:number, blankLines:number, badLines:{line:number,error:string,text:string}[], verdicts:Record<string,number>, reasons:Record<string,number>, wouldAccept:object[], stopped:object[]}}
+ * @returns {{total:number, blankLines:number, badLines:{line:number,error:string,text:string}[], verdicts:Record<string,number>, reasons:Record<string,number>, wouldAccept:object[], stopped:object[], stoppedState:object}}
  */
 export function auditText(text) {
   // A BOM is what a Windows editor adds; strip it instead of reporting line 1 as corrupt.
@@ -65,25 +87,58 @@ export function auditText(text) {
   for (const verdict of VERDICT_ORDER) verdicts[verdict] = 0
   const reasons = {}
   const wouldAccept = []
-  // A `stopped` record is a row the round did not judge at all (巡检间隔 0/空). Listed separately
-  // so the audit answers "which rows are stopped, and why did nothing run" without reading every
-  // line: the record carries recordId and the interval as the table wrote it.
-  const stopped = []
+  // Replay the stopped-set state machine, not every historical line: `snapshot` resets the set,
+  // `added` / `removed` apply one row, and `heartbeat` proves the unchanged set is still fresh.
+  // Lines written before `stoppedEvent` existed are replayed per round, so the latest round wins.
+  const stoppedRows = new Map()
+  let stoppedSnapshotRound = null
+  let legacyStoppedRound = null
+  let lastStoppedEvent = null
+  let lastStoppedLine = null
+  let lastStoppedHeartbeat = null
 
   for (const { line, record } of records) {
     verdicts[record.verdict] = (verdicts[record.verdict] ?? 0) + 1
     const reason = typeof record.reason === 'string' && record.reason !== '' ? record.reason : '(none)'
     reasons[reason] = (reasons[reason] ?? 0) + 1
     if (record.verdict === 'stopped') {
-      stopped.push({
+      const event = stoppedEventOf(record)
+      const key = stoppedRowKey(record)
+      const entry = {
         line,
         ts: record.ts ?? null,
         roundId: record.roundId ?? null,
         threadKey: record.threadKey ?? null,
         recordId: record.recordId ?? null,
         intervalMin: typeof record.intervalMin === 'number' ? record.intervalMin : null,
+        stoppedSince: typeof record.stoppedSince === 'string' ? record.stoppedSince : null,
         reason,
-      })
+        event,
+      }
+      if (event === 'snapshot') {
+        if (stoppedSnapshotRound !== (record.roundId ?? null)) {
+          stoppedRows.clear()
+          stoppedSnapshotRound = record.roundId ?? null
+        }
+        if (key) stoppedRows.set(key, entry)
+      } else if (event === 'removed') {
+        if (key) stoppedRows.delete(key)
+      } else if (event === 'added') {
+        if (key) stoppedRows.set(key, entry)
+      } else if (event === null && key) {
+        // Legacy logs had no event marker and wrote the whole set every round. Keep the latest
+        // round as the current set instead of unioning every historical stopped row.
+        const legacyRound = record.roundId ?? null
+        if (legacyStoppedRound !== null && legacyRound !== null && legacyRound !== legacyStoppedRound) {
+          stoppedRows.clear()
+        }
+        legacyStoppedRound = legacyRound
+        stoppedRows.set(key, entry)
+      }
+      if (event !== null) legacyStoppedRound = null
+      lastStoppedEvent = event ?? 'legacy'
+      lastStoppedLine = line
+      if (event === 'heartbeat') lastStoppedHeartbeat = { line, ts: entry.ts, roundId: entry.roundId, count: record.stoppedCount ?? null, fingerprint: record.stoppedFingerprint ?? null }
     }
     // `wouldAccept` is the object the Engine puts on a held-back accept. A bare `true` is
     // tolerated so a hand-written line still shows up in the list.
@@ -115,7 +170,17 @@ export function auditText(text) {
     }
   }
 
-  return { total: records.length, blankLines, badLines, verdicts, reasons, wouldAccept, stopped }
+  const stopped = [...stoppedRows.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, entry]) => ({ key, ...entry }))
+  const stoppedState = {
+    count: stopped.length,
+    fingerprint: stoppedFingerprintOf(stoppedRows),
+    lastEvent: lastStoppedEvent,
+    lastLine: lastStoppedLine,
+    lastHeartbeat: lastStoppedHeartbeat,
+  }
+  return { total: records.length, blankLines, badLines, verdicts, reasons, wouldAccept, stopped, stoppedState }
 }
 
 function orderedReasons(reasons) {
@@ -144,8 +209,9 @@ function formatHuman(file, summary) {
   out.push('')
   out.push(`stopped rows (recorded, not dispatched): ${summary.stopped.length}`)
   for (const entry of summary.stopped) {
-    out.push(`  #${entry.line} ${entry.ts ?? '(no ts)'} ${entry.recordId ?? '(no recordId)'} 巡检间隔=${entry.intervalMin === null ? '(absent)' : entry.intervalMin} reason=${entry.reason}`)
+    out.push(`  #${entry.line} ${entry.ts ?? '(no ts)'} ${entry.recordId ?? '(no recordId)'} 巡检间隔=${entry.intervalMin === null ? '(absent)' : entry.intervalMin} 停跑自=${entry.stoppedSince ?? '(unknown)'} reason=${entry.reason}`)
   }
+  out.push(`stopped set: count=${summary.stoppedState.count} fingerprint=${summary.stoppedState.fingerprint} lastEvent=${summary.stoppedState.lastEvent ?? '(none)'}`)
   if (summary.badLines.length > 0) {
     out.push('')
     out.push('bad lines (skipped, audit continued):')

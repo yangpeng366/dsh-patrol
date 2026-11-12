@@ -430,23 +430,27 @@ invalid_action=0
 | --- | --- | --- |
 | `itemIsDue()` | `0` 当 60 分钟，停跑行每小时到期 | `intervalMin <= 0` ⇒ `false`（`itemIsStopped()`），停跑行不再到期 |
 | `PatrolRunner.runOnce()` | 停跑行进入 `receive()` → Gate | 停跑行不进 `receive()`，作为 `stopped` 触发集交给同一轮 |
-| `Engine.runRound()` | 每行一条 `ignored` / `schedule-stopped` | 每条停跑行一条 `verdict: "stopped"` / `reason: "schedule-stopped"`，`evaluated` 不涨 |
-| 决策日志 | 停跑行每小时一条「被拒」 | 停跑行每轮一条「未派工」，带 `recordId` 与 `intervalMin` 原值 |
+| `Engine.runRound()` | 每行一条 `ignored` / `schedule-stopped` | 首轮逐行 `stoppedEvent="snapshot"`；之后只记 `added` / `removed` / `heartbeat`，`evaluated` 不涨 |
+| 决策日志 | 停跑行每小时一条「被拒」 | 停跑集合变化时记一行；不变时默认每 12 小时一条汇总，带条数与 `recordId + intervalMin` 指纹 |
 
 口径三点，缺一不可：
 
 1. **不派工**：`stopped` 记录在 `pending()` 之前写入，不经过 `Policy.gate()`、不调 Assessor、不开 Ticket。
    `RoundSummary.stopped` 记条数，`evaluated` 只数真正被 Gate + Assessment 判过的行。
-2. **可见**：每轮为每条停跑行写一条记录，`reason` 仍是 Policy 自己的词 `schedule-stopped`（不是新造的理由），
-   `verdict` 是新的 `stopped`（不是 `ignored`：这轮没有任何东西被拒，这行只是不在名册上）。
-3. **可回答**：记录带 `recordId`（原表 `record_id`）与 `intervalMin`（表里写的原值，`0` 即停跑），
-   所以「哪些行停跑、为什么这轮没跑」是一条查询，不必翻表也不必重放：
+2. **可见**：首轮为每条停跑行写 `stoppedEvent="snapshot"`，此后新增写 `added`、恢复写 `removed`，
+   集合不变则静默；`reason` 仍是 Policy 自己的词 `schedule-stopped`，`verdict` 仍是 `stopped`，
+   不造新理由、不造新 verdict。
+3. **可回答**：行状态事件带 `recordId`（原表 `record_id`）与 `intervalMin`（表里写的原值，`0` 即停跑）；
+   `heartbeat` 是集合级汇总，只带条数与指纹。二者合起来仍能回答「哪些行停跑、为什么这轮没跑」，
+   不必翻表；审计会自动重放状态事件：
 
    ```bash
    node scripts/policy-audit.mjs --file .artifacts/patrol-decisions.jsonl --json | jq '.stopped'
    ```
 
    `policy-audit` 的 `stopped` 列表逐条给 `recordId` / `intervalMin` / `reason`，人读输出里是独立一段。
+   审计按文件顺序重放 `snapshot / added / removed / heartbeat`，所以 `stopped` 列表是**当前**停跑行，不是历史
+   所有停跑行；`stoppedState` 另给当前条数、重算指纹与最后事件/心跳。
    `wouldAccept` 列表不受影响：`stopped` 行没有 `wouldAccept`，§4 的 68 条与重放数字（§4 表）不变。
 
 Policy 语义一个字没动：`gate()` 仍会在任何停跑行到达时回 `schedule-stopped`（测试 `tests/policy.spec.ts`
@@ -505,8 +509,8 @@ assessments=0
 verdicts={"stopped":66,"ignored":12}
 ```
 
-66 条停跑行没有一条进 Gate：`evaluated` 只有 12（间隔为正的那 12 行，全部被其它层拒），`stopped` 66 条各自
-一条记录，Assessor 一次没被调。日志里的真实一行：
+66 条停跑行没有一条进 Gate：`evaluated` 只有 12（间隔为正的那 12 行，全部被其它层拒），首轮 `stopped`
+快照为 66 条，Assessor 一次没被调。状态机上线前实测的一行：
 
 ```json
 {"ts":"2026-11-11T00:11:08.780Z","roundId":"rnd_20261111T080000Z_1","verdict":"stopped","reason":"schedule-stopped","threadKey":"patrol:recvriLOrYiTkY","triggerId":"trg_recvriLOrYiTkY_0f0621dcea9889e1","evalId":"eval_57ad5508ea75","actionSource":"column","recordId":"recvriLOrYiTkY","intervalMin":0}
@@ -519,8 +523,8 @@ verdicts={"stopped":66,"ignored":12}
 
 - `tests/runner.spec.ts`（新 1 例，「口径自证」）：一张全是停跑行的表（两条 `0` + 一条空白）跑完一轮后，
   三行各有一条 `stopped` 记录（`recordId` / `intervalMin=0` / `reason=schedule-stopped` / 同一 `roundId`），
-  `summary.stopped=3`、`summary.evaluated=0`，Assessor 计数 0，`dispatcher.seen` 为空；第二轮再写 3 条——
-  停跑是状态，不是一次性事件。
+  `summary.stopped=3`、`summary.evaluated=0`，Assessor 计数 0，`dispatcher.seen` 为空；第二轮集合不变，不再写
+  行（12 小时心跳未到）——停跑仍是状态，但日志只记状态变化与周期性心跳。
 - `tests/mapping.spec.ts`：`itemIsDue()` 对 `intervalMin=0`（含 `lastRun: null`）返回 `false`，`itemIsStopped()`
   为真；原来的「0 仍通过 due 过滤」断言改为反向并写明理由。
 - `tests/engine.spec.ts`（新 1 例）：`runRound(now, { stopped: [...] })` 只记 `stopped`，不调 Assessor，
@@ -564,11 +568,10 @@ verdicts={"stopped":66,"ignored":12}
 
 ## 9. 残余风险
 
-1. **停跑行的「被拒噪音」已消，代价换成日志行数**：`itemIsDue()` 不再把 `0` 当 60 分钟（§6.3），停跑行
-   既不进 Gate、也不进 Assessment；每轮为每条停跑行写一条 `stopped` 记录（整张表 78 行里 66 条停跑
-   ⇒ 66 行/轮；§4 那 68 条子集里是 56 条）。这是买的：行数没有减少，减少的是「被拒一次」这个毫无信息
-   的动作；换来的是 `stopped` 与 `ignored` 分开，审计能直接回答「哪些行停跑」。如果一条日志都不想多，
-   那就得回到「过滤掉停跑行」——那正是本次否掉的两难之一。
+1. **停跑行日志已收敛为状态变化 + 心跳**：`itemIsDue()` 不再把 `0` 当 60 分钟（§6.3），停跑行既不进
+   Gate、也不进 Assessment。首轮仍必然写 66 行快照（整张表 78 行里 66 条停跑），之后集合不变则静默；
+   新增/恢复只各写一行，默认每 12 小时写一条 `heartbeat`（含 `stoppedCount` 与 `recordId + intervalMin`
+   指纹）。审计重放这些事件，仍能一次列出当前停跑行；代价是日志不再逐轮自证，须依赖首轮快照/增量与心跳。
 2. **方向表还在改**：11-10 之后已有一条授权字段改动、一条仓库克隆（§5）。本文结论以 rev 4402 为准，
    行内容再变就得重跑 §3 表与 §4 计数。
 3. **`intervalMin` 进指纹** = 升级后第一次轮次会给所有行算新 Trigger id（旧 id 不复用），

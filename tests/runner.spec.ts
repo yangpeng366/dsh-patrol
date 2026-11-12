@@ -160,10 +160,11 @@ describe('PatrolRunner', () => {
       expect(record['ticketId']).toBeUndefined()
     }
 
-    // A second round says it again: the log is the record of "this row is stopped", not an event.
+    // The first round wrote the full snapshot; the next unchanged round writes nothing.
     await runner.runOnce()
     const again = (await readFile(log.path, 'utf8')).split('\n').filter((line) => line !== '')
-    expect(again).toHaveLength(6)
+    // The set did not change and the 12-hour heartbeat is far away: a second round is silent.
+    expect(again).toHaveLength(3)
     expect(assessments).toBe(0)
   })
 })
