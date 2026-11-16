@@ -11,6 +11,14 @@
 
 ### Added
 
+- `scripts/repo-cell-audit.mjs` + `tests/repo-cell-audit.spec.ts` + `docs/repo-cell-audit.md`：用 Gate 自己的
+  `inspectRepoPath()` + 真实文件系统逐行体检方向表 `仓库路径`，把每格判成 `pure`（文本与 `normalizedPath`
+  逐字节相同）/ `normalized`（唯一目录但文本需整理）/ `offender`（空、多仓、带注记、文件、缺失、未克隆、
+  相对路径，各自保留 `reason`）。`--strict` 让「没有一格写多仓」成为可复用闸门（退出 1），`--json` 供脚本消费。
+  rev 4419 实测：78 行 `pure=60 / normalized=0 / offenders=18`，其中 `repo-path-ambiguous` 2 格
+  （`reczz28QlJEjtOYY` 的 `mpd + mpd-front`、`reczz28Wyptt06nD` 的四路标签来源）——这就是「建纯路径列」
+  诉求目前的存量。只读，不改表、不派发。
+
 - 结构化「动作类型」列：`DirectionItem.actionType`（可选）+ `BitableSource` 读取方向表同名列（列不存在或
   单元格为空 ⇒ `undefined`，不报错）。`inspectAction()` 先读这一列：合法值就是 `kind`，`source='column'`，
   词表不再改判（`下一步` 写「发版」也不改）；列缺失/为空才退回词表，`source='text'`，并在 `reason` 里

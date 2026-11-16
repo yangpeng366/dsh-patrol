@@ -576,8 +576,8 @@ the same table share nothing. Run one instance per repo set.
 - `schemas/item.schema.json` exists **only in the source repo**, for contract validation: it is
 read by `tests/contract.spec.ts` and `tests/schema-parity.spec.ts`, never by `lib/index.js`, whose
 only file read is `../skills/<name>/SKILL.md` (`lib/index.js:886`).
-- `scripts/` holds maintainer tools (`shadow-run.mjs`, `policy-audit.mjs`, `same-repo-rehearsal.ts`).
-A packaged install has no `scripts/` directory, so run them from a clone.
+- `scripts/` holds maintainer tools (`shadow-run.mjs`, `policy-audit.mjs`, `same-repo-rehearsal.ts`,
+`repo-cell-audit.mjs`). A packaged install has no `scripts/` directory, so run them from a clone.
 
 ### 6. Uninstall
 
