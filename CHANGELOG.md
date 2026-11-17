@@ -11,13 +11,23 @@
 
 ### Added
 
+- `仓库路径` 的 `标签: 路径` 解析：`src/core/repo-facts.ts` 新增 `splitSourceLabel()`，把
+  `OpenEyes: E:\gitAll\openeyes` 这类前缀读成来源标签（进 `candidates[].label`），不再把标签当路径。
+  此前冒号被读作注记起点，`reczz28Wyptt06nD` 的四路来源全部退化成 `unresolved` 候选——四个目录都在盘上，
+  报表却说四个都解析不出来。认标签的四个条件：前缀无路径分隔符、不是单个盘符（`D:\x`）、≤60 字、
+  冒号后确实是本地绝对路径 / URL / `未克隆` 标记。标签不参与歧义判定：单条 `前端: D:\x` 是
+  `repo-exists-ok`，多条带标签的不同路径仍 `repo-path-ambiguous`。rev 4419 前后对比
+  `rows=78 pure=60 offenders=18` 不变（那两格本来就是「一格多仓」），变的是 offender 的候选可读：
+  四个 `directory` + 各自 label，`Test-Path` 四个 `True` 一致。`repo-cell-audit` 的报告行改为
+  `标签 → "路径" kind`。（`6c96cd9`）
+
 - `scripts/repo-cell-audit.mjs` + `tests/repo-cell-audit.spec.ts` + `docs/repo-cell-audit.md`：用 Gate 自己的
   `inspectRepoPath()` + 真实文件系统逐行体检方向表 `仓库路径`，把每格判成 `pure`（文本与 `normalizedPath`
   逐字节相同）/ `normalized`（唯一目录但文本需整理）/ `offender`（空、多仓、带注记、文件、缺失、未克隆、
   相对路径，各自保留 `reason`）。`--strict` 让「没有一格写多仓」成为可复用闸门（退出 1），`--json` 供脚本消费。
   rev 4419 实测：78 行 `pure=60 / normalized=0 / offenders=18`，其中 `repo-path-ambiguous` 2 格
   （`reczz28QlJEjtOYY` 的 `mpd + mpd-front`、`reczz28Wyptt06nD` 的四路标签来源）——这就是「建纯路径列」
-  诉求目前的存量。只读，不改表、不派发。
+  诉求目前的存量。只读，不改表、不派发。（`2e9c356`）
 
 - 结构化「动作类型」列：`DirectionItem.actionType`（可选）+ `BitableSource` 读取方向表同名列（列不存在或
   单元格为空 ⇒ `undefined`，不报错）。`inspectAction()` 先读这一列：合法值就是 `kind`，`source='column'`，
