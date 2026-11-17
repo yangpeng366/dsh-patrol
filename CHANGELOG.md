@@ -11,6 +11,15 @@
 
 ### Added
 
+- `repo-cell-audit` 的**按动作归类**：新增 `fixActionOf()` + `FIX_ACTIONS`，把 Gate 的拒绝词表翻成「人要做的事」——
+  `fill-cell` / `write-absolute-path` / `point-to-directory` / `clone-repo` / `restore-path` /
+  `drop-annotation` / `split-cell`。拒绝理由与人工改动不是一一对应（`repo-path-ambiguous` 既可能是「一仓夹注记」
+  也可能是「一格两仓」），所以报告除了 reason 计数再打一段动作计数，每个 offender 行也带 `action`，`--json` 多
+  `byAction`。rev 4419 实测：`fill-cell 9 / restore-path 3 / clone-repo 2 / split-cell 2 /
+  point-to-directory 1 / write-absolute-path 1 = 18`，与 reason 计数逐项对得上（`rows=78 pure=60` 不变）。
+  Gate 未动——拒绝理由已带计数发布在 `docs/policy-v4-triage.md`，这是报表关注点。
+  `scripts/repo-cell-audit.d.mts` 同步补 `FixAction` 类型。（`2e10308`）
+
 - `仓库路径` 的 `标签: 路径` 解析：`src/core/repo-facts.ts` 新增 `splitSourceLabel()`，把
   `OpenEyes: E:\gitAll\openeyes` 这类前缀读成来源标签（进 `candidates[].label`），不再把标签当路径。
   此前冒号被读作注记起点，`reczz28Wyptt06nD` 的四路来源全部退化成 `unresolved` 候选——四个目录都在盘上，
