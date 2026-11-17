@@ -19,6 +19,15 @@
  *                  fine — only `/`, `\` and drive case are folded, never prose)
  *   - `offender`  no single proven directory: empty, two repos, prose, file, missing, uncloned
  *
+ * Offenders are counted twice on purpose. `reason` says *why the Gate refused* (a fact, stable, the
+ * same vocabulary the decision log uses); `action` says *what a human must change* for that row to
+ * become admissible. The two are not one-to-one — `repo-path-ambiguous` covers both "one path with a
+ * note glued on" and "two repos in one cell", and those need different edits — so a report that
+ * only tallies reasons still leaves the table owner to re-derive the to-do list by eye.
+ *
+ * `action` is derived here and never in the Gate: the refusal reasons are published in
+ * `docs/policy-v4-triage.md` with counts, and a reporting concern must not move them.
+ *
  *   node scripts/repo-cell-audit.mjs                       # newest dump under .artifacts/direction
  *   node scripts/repo-cell-audit.mjs --file <dump.ndjson>
  *   node scripts/repo-cell-audit.mjs --file <dump.ndjson> --json
@@ -60,6 +69,44 @@ export function cellText(value) {
   return String(value).trim()
 }
 
+/**
+ * What has to change in the cell for the row to become one proven directory.
+ *
+ * The vocabulary is deliberately disjoint from `RepoExistsReason`: one action can cover several
+ * reasons (`restore-path` covers both "missing" and "unreachable"), and one reason can need two
+ * actions (`repo-path-ambiguous` is `split-cell` when two paths are named and `drop-annotation` when
+ * one path carries extra words). Ids are stable strings so a later round can diff the counts.
+ */
+export const FIX_ACTIONS = {
+  'fill-cell': 'empty cell: write the path, or mark the row as not started',
+  'write-absolute-path': 'relative path: write the absolute local path',
+  'point-to-directory': 'points at a file: point it at the repo directory',
+  'clone-repo': 'names a repo that is not cloned here: clone it, then write the local path',
+  'restore-path': 'path is absent or unreachable: clone/mount it, or retire the row',
+  'drop-annotation': 'one path plus a note/URL in the same cell: move the note to a notes column',
+  'split-cell': 'more than one repo in one cell: split the row or add a 纯路径 column',
+}
+
+/**
+ * The human edit one refused cell needs.
+ *
+ * Reads only the fact the Gate produced (`reason` + per-candidate truth), so a caller cannot get a
+ * different answer than the one the refusal itself implies.
+ */
+export function fixActionOf(fact) {
+  switch (fact.reason) {
+    case 'repo-empty-cell': return 'fill-cell'
+    case 'repo-path-relative-unresolved': return 'write-absolute-path'
+    case 'repo-not-a-directory': return 'point-to-directory'
+    case 'repo-not-cloned': return 'clone-repo'
+    case 'repo-not-local-path': return 'clone-repo'
+    case 'repo-missing': return 'restore-path'
+    case 'repo-path-unreachable': return 'restore-path'
+    case 'repo-path-ambiguous': return (fact.candidates ?? []).length > 1 ? 'split-cell' : 'drop-annotation'
+    default: return 'split-cell'
+  }
+}
+
 /** Newest `*.ndjson` in `dir`, or `undefined` when there is none. */
 export function newestDump(dir = DEFAULT_DIR) {
   let names
@@ -93,6 +140,7 @@ export function auditCells(rows, options = {}) {
   if (typeof inspect !== 'function') throw new Error('auditCells needs the Gate\'s inspectRepoPath()')
 
   const tally = new Map()
+  const actions = new Map()
   const offenders = []
   let pure = 0
   let normalized = 0
@@ -111,11 +159,14 @@ export function auditCells(rows, options = {}) {
       continue
     }
 
+    const action = fixActionOf(fact)
+    actions.set(action, (actions.get(action) ?? 0) + 1)
     offenders.push({
       recordId: row.record_id ?? '',
       name: cellText(row['项目名']),
       raw,
       reason: fact.reason,
+      action,
       kind: fact.kind,
       candidates: fact.candidates ?? [],
     })
@@ -127,6 +178,9 @@ export function auditCells(rows, options = {}) {
     normalized,
     offenders,
     tally: [...tally.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+    byAction: [...actions.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([action, count]) => ({ action, count })),
   }
 }
 
@@ -142,9 +196,14 @@ export function renderReport(report, source) {
     lines.push('every 仓库路径 cell is a single proven local directory')
     return lines.join('\n')
   }
+  // The reason tally answers "what did the Gate refuse"; this one answers "what do I edit".
+  lines.push('--- what has to change, by action ---')
+  for (const { action, count } of report.byAction) {
+    lines.push(`  ${String(count).padStart(3)}  ${action.padEnd(20)} ${FIX_ACTIONS[action] ?? ''}`.trimEnd())
+  }
   lines.push('--- cells that are not a single proven directory ---')
   for (const row of report.offenders) {
-    lines.push(`${row.recordId} | ${row.name} | ${row.reason} | ${JSON.stringify(row.raw)}`)
+    lines.push(`${row.recordId} | ${row.name} | ${row.reason} | ${row.action} | ${JSON.stringify(row.raw)}`)
     for (const candidate of row.candidates) {
       const note = candidate.annotation ? ` // ${candidate.annotation}` : ''
       const label = candidate.label ? `${candidate.label} → ` : ''

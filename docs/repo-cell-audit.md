@@ -58,6 +58,30 @@ rows=78  pure=60  normalized=0  offenders=18
 - `reczz28Wyptt06nD` OpenEyes / 鼠标集群方向：四路来源用 `;` 分隔且每路带标签
   （`OpenEyes: E:\gitAll\openeyes; agent-desktop (GitCode): …`）
 
+### 3.0 按「人要做的事」归类（2026-11-18）
+
+`reason` 是 Gate 的拒绝词表（事实，已发布计数，不能为报表改）；`action` 是这一格要变成
+「唯一可证目录」所需的**人工改动**。两者不是一一对应：`repo-path-ambiguous` 既可能是「一仓夹注记」
+也可能是「一格两仓」，改法完全不同。所以报告多了一段按动作的计数，`--json` 多一个 `byAction`：
+
+```
+--- what has to change, by action ---
+    9  fill-cell            empty cell: write the path, or mark the row as not started
+    3  restore-path         path is absent or unreachable: clone/mount it, or retire the row
+    2  clone-repo           names a repo that is not cloned here: clone it, then write the local path
+    2  split-cell           more than one repo in one cell: split the row or add a 纯路径 column
+    1  point-to-directory   points at a file: point it at the repo directory
+    1  write-absolute-path  relative path: write the absolute local path
+```
+
+同一份 rev 4419 快照：`fill-cell 9 / restore-path 3 / clone-repo 2 / split-cell 2 /
+point-to-directory 1 / write-absolute-path 1 = 18`，与 reason 计数逐项对得上（`repo-missing 3` 归
+`restore-path`，`repo-not-cloned 2` 归 `clone-repo`，两格 `repo-path-ambiguous` 都是多仓 → `split-cell`）。
+每行的 `offender` 行也带上动作（`recordId | 项目名 | reason | action | "原文"`），可直接照行改表。
+
+只有 `split-cell` 与 `drop-annotation` 这一对需要看候选数才能定：候选 > 1 是「一格多仓」，候选 = 1
+是「一仓夹注记/URL」，判据在 `fixActionOf()` 里，不猜。
+
 ### 3.1 `标签: 路径` 的解析（2026-11-17 实验）
 
 带标签的这格此前会把**标签当路径**：冒号被读成注记起点，候选退化成 `OpenEyes` / `agent-desktop` / `Cua`
@@ -95,9 +119,9 @@ rows=78  pure=60  normalized=0  offenders=18
 
 ```powershell
 npx tsc --noEmit                                        # clean
-npx vitest run tests/repo-cell-audit.spec.ts            # 15 passed
+npx vitest run tests/repo-cell-audit.spec.ts            # 19 passed
 npx vitest run tests/repo-facts.spec.ts                 # 28 passed
-npx vitest run                                          # 274 passed (20 files)
+npx vitest run                                          # 278 passed (20 files)
 ```
 
 `tests/repo-cell-audit.spec.ts` 分两半：单元侧注入假的 `inspectRepoPath()` 断言三种状态、`--strict` 语义

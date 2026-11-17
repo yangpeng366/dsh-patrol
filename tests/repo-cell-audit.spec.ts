@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-import { cellText, parseArgs, parseDump, newestDump, renderReport, exitCodeFor } from '../scripts/repo-cell-audit.mjs'
+import { cellText, fixActionOf, parseArgs, parseDump, newestDump, renderReport, exitCodeFor, FIX_ACTIONS } from '../scripts/repo-cell-audit.mjs'
 import { inspectRepoPath } from '../src/core/repo-facts.ts'
 
 const script = fileURLToPath(new URL('../scripts/repo-cell-audit.mjs', import.meta.url))
@@ -89,6 +89,71 @@ describe('auditCells', () => {
   it('refuses to run without the Gate\'s inspector', async () => {
     const mod = await import('../scripts/repo-cell-audit.mjs')
     expect(() => mod.auditCells([], {})).toThrow(/inspectRepoPath/)
+  })
+})
+
+describe('fix actions', () => {
+  it('maps every refusal reason the Gate can produce to one human edit', () => {
+    const cases: Array<[string, number, string]> = [
+      ['repo-empty-cell', 0, 'fill-cell'],
+      ['repo-path-relative-unresolved', 1, 'write-absolute-path'],
+      ['repo-not-a-directory', 1, 'point-to-directory'],
+      ['repo-not-cloned', 0, 'clone-repo'],
+      ['repo-not-local-path', 0, 'clone-repo'],
+      ['repo-missing', 1, 'restore-path'],
+      ['repo-path-unreachable', 1, 'restore-path'],
+    ]
+    for (const [reason, candidates, expected] of cases) {
+      const fact = { reason, candidates: Array.from({ length: candidates }, () => ({ path: 'D:\\gitAll\\alpha' })) }
+      expect(fixActionOf(fact), reason).toBe(expected)
+    }
+    // Every action a fact can name has a line of prose, so the report never prints an empty column.
+    for (const prose of Object.values(FIX_ACTIONS)) expect(prose).not.toBe('')
+  })
+
+  it('splits `repo-path-ambiguous` by what the cell actually contains', () => {
+    const twoPaths = { reason: 'repo-path-ambiguous', candidates: [{ path: 'D:\\a' }, { path: 'D:\\b' }] }
+    const onePathWithNote = { reason: 'repo-path-ambiguous', candidates: [{ path: 'D:\\a', annotation: '（门禁）' }] }
+    expect(fixActionOf(twoPaths)).toBe('split-cell')
+    expect(fixActionOf(onePathWithNote)).toBe('drop-annotation')
+  })
+
+  it('counts offenders by action and keeps the reason tally unchanged', async () => {
+    const report = await audit([
+      { record_id: 'recEmpty', 项目名: '空', 仓库路径: [] },
+      { record_id: 'recGone', 项目名: '没有', 仓库路径: 'D:\\gitAll\\gone' },
+      { record_id: 'recNote', 项目名: '注记', 仓库路径: 'D:\\gitAll\\alpha（门禁）' },
+      { record_id: 'recTwo', 项目名: '两仓', 仓库路径: 'D:\\gitAll\\alpha + D:\\gitAll\\beta' },
+      { record_id: 'recUrl', 项目名: '未克隆', 仓库路径: '（未克隆）https://github.com/x/y' },
+    ])
+    expect(report.offenders.map((row: { action: string }) => row.action)).toEqual([
+      'fill-cell',
+      'restore-path',
+      'drop-annotation',
+      'split-cell',
+      'clone-repo',
+    ])
+    expect(report.byAction).toEqual([
+      { action: 'clone-repo', count: 1 },
+      { action: 'drop-annotation', count: 1 },
+      { action: 'fill-cell', count: 1 },
+      { action: 'restore-path', count: 1 },
+      { action: 'split-cell', count: 1 },
+    ])
+    // A report that only tallied actions would lose the refusal vocabulary the log shares.
+    expect(report.tally.map((row: { reason: string }) => row.reason)).toContain('repo-path-ambiguous')
+  })
+
+  it('prints the action block and the action on each offender line', async () => {
+    const dirty = await audit([
+      { record_id: 'recTwo', 项目名: '两仓', 仓库路径: 'D:\\gitAll\\alpha + D:\\gitAll\\beta' },
+      { record_id: 'recEmpty', 项目名: '空', 仓库路径: [] },
+    ])
+    const text = renderReport(dirty, 'dump.ndjson')
+    expect(text).toContain('--- what has to change, by action ---')
+    expect(text).toMatch(/\s2\s+split-cell|\s1\s+split-cell/)
+    expect(text).toContain('recTwo | 两仓 | repo-path-ambiguous | split-cell |')
+    expect(text).toContain('recEmpty | 空 | repo-empty-cell | fill-cell |')
   })
 })
 
