@@ -159,6 +159,108 @@ describe('inspectRepoPath: paths that exist but are not a repo', () => {
   })
 })
 
+describe('inspectRepoPath: `标签: 路径` multi-source cells', () => {
+  // The table writes a multi-source row with a source name in front of each path. Before this
+  // block existed, the colon after the label was read as the start of an annotation, so the
+  // candidate became the *label* as a relative path and the whole cell degenerated to `unresolved`
+  // even though every path was on disk.
+  const OPENEYES = [
+    'OpenEyes: E:\\gitAll\\openeyes',
+    'agent-desktop (GitCode): C:\\Users\\47037\\source-research\\mouse-cluster\\agent-desktop-gitcode-source',
+    'Cua (GitCode): C:\\Users\\47037\\source-research\\mouse-cluster\\cua-gitcode-source',
+    'Cua (Gitee): C:\\Users\\47037\\source-research\\mouse-cluster\\cua-gitee-source',
+  ].join('; ')
+
+  it('keeps every path of a four-source cell real, with its label, instead of `unresolved` labels', () => {
+    const fact = inspectRepoPath(OPENEYES, { probe: probe(DIRECTORY) })
+    expect(fact.reason).toBe('repo-path-ambiguous')
+    expect(fact.kind).toBe('multiple')
+    expect(fact.candidates.map((candidate) => candidate.label)).toEqual([
+      'OpenEyes',
+      'agent-desktop (GitCode)',
+      'Cua (GitCode)',
+      'Cua (Gitee)',
+    ])
+    expect(fact.candidates.map((candidate) => candidate.path)).toEqual([
+      'E:\\gitAll\\openeyes',
+      'C:\\Users\\47037\\source-research\\mouse-cluster\\agent-desktop-gitcode-source',
+      'C:\\Users\\47037\\source-research\\mouse-cluster\\cua-gitcode-source',
+      'C:\\Users\\47037\\source-research\\mouse-cluster\\cua-gitee-source',
+    ])
+    expect(fact.candidates.map((candidate) => candidate.kind)).toEqual(['directory', 'directory', 'directory', 'directory'])
+    expect(fact.candidates.every((candidate) => candidate.exists)).toBe(true)
+  })
+
+  it('admits one labelled directory: a source name is not a claim about the repo', () => {
+    const fact = inspectRepoPath('前端: D:\\gitAll\\mpd', { probe: probe(DIRECTORY) })
+    expect(fact).toMatchObject({
+      exists: true,
+      kind: 'directory',
+      normalizedPath: 'D:\\gitAll\\mpd',
+      reason: 'repo-exists-ok',
+    })
+    expect(fact.candidates[0]?.label).toBe('前端')
+    expect(fact.candidates[0]?.annotation).toBeUndefined()
+  })
+
+  it('reads a label that carries its own source note, and a POSIX labelled path', () => {
+    expect(inspectRepoPath('agent-desktop (GitCode): C:\\src\\agent-desktop', { probe: probe(DIRECTORY) })).toMatchObject({
+      reason: 'repo-exists-ok',
+      normalizedPath: 'C:\\src\\agent-desktop',
+    })
+    const posix = inspectRepoPath('render: /srv/git/render', { probe: probe(DIRECTORY) })
+    expect(posix.reason).toBe('repo-exists-ok')
+    expect(posix.normalizedPath).toBe('/srv/git/render')
+    expect(posix.candidates[0]?.label).toBe('render')
+  })
+
+  it('still refuses a labelled path with a note glued to it', () => {
+    const fact = inspectRepoPath('前端: D:\\gitAll\\mpd（含 mpd-front）', { probe: probe(DIRECTORY) })
+    expect(fact).toMatchObject({ exists: true, kind: 'directory', normalizedPath: 'D:\\gitAll\\mpd', reason: 'repo-path-ambiguous' })
+    expect(fact.candidates[0]?.label).toBe('前端')
+    expect(fact.candidates[0]?.annotation).toBe('（含 mpd-front）')
+  })
+
+  it('does not read a drive letter as a label', () => {
+    for (const cell of ['D:\\gitAll\\dsh-patrol', 'D:\\gitAll\\dsh-superagent-prototype（未克隆）']) {
+      expect(inspectRepoPath(cell, { probe: probe(DIRECTORY) }).candidates[0]?.label).toBeUndefined()
+    }
+  })
+
+  it('does not read prose before a colon as a label when no local path follows', () => {
+    const fact = inspectRepoPath('说明: 见 docs/xxx.md', { probe: probe(DIRECTORY) })
+    expect(fact).toMatchObject({ exists: false, kind: 'unresolved', reason: 'repo-path-relative-unresolved' })
+    expect(fact.candidates[0]?.label).toBeUndefined()
+  })
+
+  it('keeps a labelled URL or 未克隆 marker a refusal, without probing', () => {
+    const noProbe = () => {
+      throw new Error('must not probe a cell that names no local path')
+    }
+    expect(inspectRepoPath('官网: https://github.com/x/y', { probe: noProbe })).toMatchObject({
+      kind: 'url',
+      reason: 'repo-not-local-path',
+    })
+    expect(inspectRepoPath('上游: （未克隆）https://github.com/x/y', { probe: noProbe })).toMatchObject({
+      kind: 'url',
+      reason: 'repo-not-cloned',
+    })
+  })
+
+  it('reports a labelled missing path as missing, and keeps the label', () => {
+    const fact = inspectRepoPath('后端: D:\\gitAll\\pi-agent-cloud', { probe: probe({ kind: 'missing' }) })
+    expect(fact).toMatchObject({ exists: false, kind: 'missing', reason: 'repo-missing' })
+    expect(fact.candidates[0]?.label).toBe('后端')
+  })
+
+  it('does not read the same labelled path twice as two repos', () => {
+    const fact = inspectRepoPath('主仓: D:\\gitAll\\sum\n副仓: d:/gitall/sum/', { probe: probe(DIRECTORY) })
+    expect(fact.reason).toBe('repo-exists-ok')
+    expect(fact.candidates).toHaveLength(1)
+    expect(fact.candidates[0]?.label).toBe('主仓')
+  })
+})
+
 describe('inspectRepoPath: the real filesystem', () => {
   it('proves a temp directory, a file inside it, and a path that is not there', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-patrol-repo-'))

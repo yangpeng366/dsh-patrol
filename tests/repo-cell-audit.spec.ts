@@ -54,6 +54,17 @@ describe('auditCells', () => {
     expect(report.offenders[0]?.candidates.map((c: { path: string }) => c.path)).toEqual(['D:\\gitAll\\alpha', 'D:\\gitAll\\beta'])
   })
 
+  it('reads a labelled multi-source cell as real candidates, not as `unresolved` labels', async () => {
+    const report = await audit([
+      { record_id: 'recLabelled', 项目名: '多源', 仓库路径: '前端: D:\\gitAll\\alpha; 后端 (GitCode): D:\\gitAll\\beta' },
+    ])
+    const row = report.offenders[0]
+    expect(row?.reason).toBe('repo-path-ambiguous')
+    expect(row?.candidates.map((c: { path: string }) => c.path)).toEqual(['D:\\gitAll\\alpha', 'D:\\gitAll\\beta'])
+    expect(row?.candidates.map((c: { kind: string }) => c.kind)).toEqual(['directory', 'directory'])
+    expect(row?.candidates.map((c: { label?: string }) => c.label)).toEqual(['前端', '后端 (GitCode)'])
+  })
+
   it('keeps every non-directory shape as an offender with its own reason', async () => {
     const report = await audit([
       { record_id: 'recEmpty', 项目名: '空', 仓库路径: [] },
@@ -97,6 +108,15 @@ describe('strict gate and report', () => {
     expect(text).toContain('rows=1  pure=0  normalized=0  offenders=1')
     expect(text).toContain('recTwo | 两仓 | repo-path-ambiguous')
     expect(text).toContain('"D:\\\\gitAll\\\\beta" directory')
+  })
+
+  it('prints the source label in front of each labelled candidate', async () => {
+    const dirty = await audit([
+      { record_id: 'recLabelled', 项目名: '多源', 仓库路径: '前端: D:\\gitAll\\alpha; 后端: D:\\gitAll\\beta' },
+    ])
+    const text = renderReport(dirty, 'dump.ndjson')
+    expect(text).toContain('前端 → "D:\\\\gitAll\\\\alpha" directory')
+    expect(text).not.toContain('unresolved')
   })
 })
 

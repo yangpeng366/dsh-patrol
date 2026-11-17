@@ -56,7 +56,28 @@ rows=78  pure=60  normalized=0  offenders=18
 
 - `reczz28QlJEjtOYY` MPD App OA登录页：`D:\gitAll\mpd + D:\gitAll\mpd-front`（两个目录都真实存在）
 - `reczz28Wyptt06nD` OpenEyes / 鼠标集群方向：四路来源用 `;` 分隔且每路带标签
-  （`OpenEyes: E:\gitAll\openeyes; agent-desktop (GitCode): …`），解析器把标签当路径，故为 `unresolved` 候选
+  （`OpenEyes: E:\gitAll\openeyes; agent-desktop (GitCode): …`）
+
+### 3.1 `标签: 路径` 的解析（2026-11-17 实验）
+
+带标签的这格此前会把**标签当路径**：冒号被读成注记起点，候选退化成 `OpenEyes` / `agent-desktop` / `Cua`
+这类相对文本，`kind` 全是 `unresolved`——四个仓库都在盘上，报表却说四个都解析不出来。
+
+现在 `splitSourceLabel()` 只在四个条件同时成立时才认标签：前缀无路径分隔符、不是单个盘符（`D:\x`）、
+长度 ≤60、冒号后确实是本地绝对路径 / URL / `未克隆` 标记。标签进 `candidates[].label`，不参与歧义判定。
+
+同一份 rev 4419 快照的前后对比（`--file` 同参数）：
+
+| | 改前 | 改后 |
+| --- | --- | --- |
+| `rows / pure / offenders` | 78 / 60 / 18 | 78 / 60 / 18（**不变**） |
+| 该格候选 | 4 个 `unresolved`（路径是标签名） | 4 个 `directory`，label=`OpenEyes` / `agent-desktop (GitCode)` / `Cua (GitCode)` / `Cua (Gitee)` |
+| 该格 reason | `repo-path-ambiguous` | `repo-path-ambiguous`（仍是四仓一格，拒得对） |
+
+四个路径对真实文件系统逐一 `statSync` 均为目录，与 `Test-Path` 的四个 `True` 一致。
+单条标签（`前端: D:\gitAll\mpd`）现在是 `repo-exists-ok` 且 `label` 保留；标签后跟注记仍 `repo-path-ambiguous`。
+结论：这格的问题从来不是「解析不出来」，而是「一格四仓」；标签解析让 offender 的理由终于可读，
+但没有也不能把 2 格多仓变成 1 格——那是人改表或加「纯路径」列的事。
 
 结论：**「纯路径」列要表达的，就是 `pure=60 / offenders=18` 这组数**。真正需要人要动手的是 18 格，
 其中 2 格是结构性的（多仓），9 格是空值，其余 7 格是缺失/未克隆/文件/相对路径——不是同一类问题，
@@ -74,10 +95,13 @@ rows=78  pure=60  normalized=0  offenders=18
 
 ```powershell
 npx tsc --noEmit                                        # clean
-npx vitest run tests/repo-cell-audit.spec.ts            # 13 passed
-npx vitest run                                          # 263 passed (20 files)
+npx vitest run tests/repo-cell-audit.spec.ts            # 15 passed
+npx vitest run tests/repo-facts.spec.ts                 # 28 passed
+npx vitest run                                          # 274 passed (20 files)
 ```
 
-`tests/repo-cell-audit.spec.ts` 分两半：单元侧注入假的 `inspectRepoPath()` 断言三种状态与
-`--strict` 语义；CLI 侧用临时目录 + 真实两仓单元格跑真脚本，断言退出码 0/1/2 与 JSON 输出——
+`tests/repo-cell-audit.spec.ts` 分两半：单元侧注入假的 `inspectRepoPath()` 断言三种状态、`--strict` 语义
+与标签候选的渲染；CLI 侧用临时目录 + 真实两仓单元格跑真脚本，断言退出码 0/1/2 与 JSON 输出——
 脚本的用法说明与真实行为必须一致，否则文档又会先腐烂。
+`tests/repo-facts.spec.ts` 的「`标签: 路径` 多源单元格」块把 rev 4419 的原始单元格原样钉住：
+四路标签必须都解成 `directory` 且带 `label`，盘符不得被当标签，标签后带注记仍拒。

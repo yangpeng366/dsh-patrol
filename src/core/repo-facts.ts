@@ -3,7 +3,8 @@
  *
  * Policy v4's `auto` path needs one fact the direction table never gave it: does `仓库路径` name a
  * real local directory? The cell is free text — a plain path, a path with a note glued to it, two
- * repos added together, a URL marked 未克隆, a markdown file, a relative path, an empty cell — so
+ * repos added together, the same two repos each behind a `标签: ` source name, a URL marked 未克隆, a
+ * markdown file, a relative path, an empty cell — so
  * the question is not "does this string exist on disk". It is "what, if anything, does this cell
  * denote, and can that be proved".
  *
@@ -65,6 +66,13 @@ export interface RepoCandidate {
   exists: boolean
   /** Text that followed the path inside the same cell segment, e.g. `（DSH 本体未克隆…）`. */
   annotation?: string
+  /**
+   * Source name written before the path, e.g. `OpenEyes` in `OpenEyes: E:\gitAll\openeyes`.
+   *
+   * A label is metadata about *where the source came from*, not a claim about the repo, so it is
+   * recorded and never folded into the path or into the refusal reason.
+   */
+  label?: string
 }
 
 /**
@@ -117,6 +125,8 @@ const ANNOTATION_MARKERS = ['（', '(', '【', '[', '<', '>', '"', '|', '*', '?'
 const CLONE_MARK = /^[（(]?\s*未克隆\s*[）)]?\s*[:：]?\s*/
 const URL_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 const WINDOWS_ABSOLUTE_RE = /^[A-Za-z]:[\\/]/
+/** A label longer than this is prose, not a source name. */
+const LABEL_MAX = 60
 
 /** A cell may be an array of Bitable segments; each becomes its own line. */
 function normalizeCell(raw: unknown): string {
@@ -175,26 +185,69 @@ function annotationStart(text: string): number {
   return -1
 }
 
+/**
+ * Where a segment stops naming a source and starts naming a location.
+ *
+ * Only shapes that cannot be anything but a local path count: `X:\`, `\\server\share`, and a
+ * POSIX `/` (but not `//`, which is the tail of `https://`). A relative remainder does not, so
+ * `说明: 见 02_xxx.md` keeps its old reading instead of becoming a bogus path.
+ */
+function isLocalPathStart(text: string): boolean {
+  return WINDOWS_ABSOLUTE_RE.test(text) || text.startsWith('\\\\') || (text.startsWith('/') && !text.startsWith('//'))
+}
+
+/**
+ * Splits a `标签: 路径` segment into its label and the text that follows.
+ *
+ * The direction table writes multi-source cells two ways: bare paths joined by ` + `/`;`, and the
+ * same paths each carrying a source name — `OpenEyes: E:\gitAll\openeyes; agent-desktop
+ * (GitCode): C:\…`. The second shape used to lose every path: the colon after the label was read
+ * as the start of an annotation, so the candidate became the *label* as a relative path and the
+ * cell degenerated to `unresolved` even though each path was present.
+ *
+ * A prefix only counts as a label when the remainder is a source the segment classifier can read
+ * (a local absolute path, a URL, or an explicit 未克隆 marker), the prefix carries no path
+ * separator, is not a lone drive letter (`D:\x`), and is short enough to be a name.
+ */
+function splitSourceLabel(text: string): { label: string; rest: string } | null {
+  const colon = text.search(/[:：]/)
+  if (colon <= 0) return null
+  const label = text.slice(0, colon).trim()
+  const rest = text.slice(colon + 1).trim()
+  if (label === '' || label.length > LABEL_MAX) return null
+  if (/[\\/]/.test(label)) return null
+  if (/^[A-Za-z]$/.test(label)) return null
+  if (!isLocalPathStart(rest) && !URL_RE.test(rest) && !CLONE_MARK.test(rest)) return null
+  return { label, rest }
+}
+
 interface Segment {
   pathText: string
   annotation: string
+  label?: string
   notCloned: boolean
   url: boolean
 }
 
 function classifySegment(segment: string): Segment {
   let text = segment.trim()
+  let label: string | undefined
+  const source = splitSourceLabel(text)
+  if (source) {
+    label = source.label
+    text = source.rest
+  }
   let notCloned = false
   const cloneMark = CLONE_MARK.exec(text)
   if (cloneMark) {
     notCloned = true
     text = text.slice(cloneMark[0].length).trim()
   }
-  if (URL_RE.test(text)) return { pathText: '', annotation: '', notCloned, url: true }
+  if (URL_RE.test(text)) return { pathText: '', annotation: '', label, notCloned, url: true }
   const start = annotationStart(text)
   const pathText = (start < 0 ? text : text.slice(0, start)).trim()
   const annotation = start < 0 ? '' : text.slice(start).trim()
-  return { pathText, annotation, notCloned, url: false }
+  return { pathText, annotation, label, notCloned, url: false }
 }
 
 /** `win32` for drive/UNC shapes regardless of host, `posix` otherwise. */
@@ -291,7 +344,13 @@ export function inspectRepoPath(raw: unknown, options: RepoInspectOptions = {}):
     const resolved = resolvePath(parsed.pathText, options.baseDir)
     if (resolved.unresolved) {
       sawUnresolved = true
-      candidates.push({ path: parsed.pathText, kind: 'unresolved', exists: false, annotation: parsed.annotation || undefined })
+      candidates.push({
+        path: parsed.pathText,
+        kind: 'unresolved',
+        exists: false,
+        annotation: parsed.annotation || undefined,
+        label: parsed.label,
+      })
       continue
     }
     const kind = kindOf(probe(resolved.path))
@@ -300,6 +359,7 @@ export function inspectRepoPath(raw: unknown, options: RepoInspectOptions = {}):
       kind,
       exists: kind === 'directory' || kind === 'file' || kind === 'other',
       annotation: parsed.annotation || undefined,
+      label: parsed.label,
     })
   }
 
@@ -329,6 +389,10 @@ export function inspectRepoPath(raw: unknown, options: RepoInspectOptions = {}):
   // Everything that reached here is one path; the cell is still refused when the same segment
   // carried a note, or a second segment was a URL / a 未克隆 marker: the row's repo is not in doubt
   // about *existence*, it is in doubt about *which* statement it makes.
+  //
+  // A source label is the one prefix that does *not* make the cell ambiguous: `OpenEyes: E:\x` names
+  // exactly one directory and says where it came from. The label travels with the candidate so the
+  // audit can still print it; it never changes the path or the reason.
   const ambiguous = Boolean(only.annotation) || sawUrl || sawNotCloned || sawUnresolved
   return {
     raw: rawText,

@@ -12,6 +12,7 @@ export interface RepoCandidate {
   kind: string
   exists: boolean
   annotation?: string
+  label?: string
 }
 
 export interface RepoCellOffender {

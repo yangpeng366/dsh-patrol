@@ -147,7 +147,8 @@ export function renderReport(report, source) {
     lines.push(`${row.recordId} | ${row.name} | ${row.reason} | ${JSON.stringify(row.raw)}`)
     for (const candidate of row.candidates) {
       const note = candidate.annotation ? ` // ${candidate.annotation}` : ''
-      lines.push(`    ${JSON.stringify(candidate.path)} ${candidate.kind}${note}`)
+      const label = candidate.label ? `${candidate.label} → ` : ''
+      lines.push(`    ${label}${JSON.stringify(candidate.path)} ${candidate.kind}${note}`)
     }
   }
   return lines.join('\n')

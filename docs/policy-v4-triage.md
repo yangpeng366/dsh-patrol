@@ -301,7 +301,7 @@ reason-repo-not-cloned=1
 | `kind` | `directory` / `file` / `other` / `missing` / `unreachable` / `empty` / `multiple` / `url` / `unresolved` |
 | `normalizedPath` | 绝对化、规范化后的路径（盘符大写、分隔符统一、去尾部分隔符）；无单一指向时为 `''` |
 | `reason` | Gate 直接当拒绝理由用；只有 `repo-exists-ok` 是通过值 |
-| `candidates` | 每个路径片段的 `path / kind / exists / annotation`，供审计 |
+| `candidates` | 每个路径片段的 `path / kind / exists / annotation / label`，供审计 |
 
 fail-closed 的边界，逐条写成代码而不是猜：
 
@@ -309,6 +309,9 @@ fail-closed 的边界，逐条写成代码而不是猜：
   分隔符在括号内不生效，所以 `（DSH 本体未克隆；上游 …）` 不会被切成两个候选。
 - **带说明文字**：路径后跟 `（`、`；`、`：`、`,` 等 ⇒ `repo-path-ambiguous`，但 `exists/kind/normalizedPath`
   照实报告那条路径（“目录在，只是这一格还说了别的”）。
+- **`标签: 路径`**：前缀在没有路径分隔符、不是单个盘符、且冒号后确实是本地绝对路径/URL/`未克隆` 时
+  才被读作来源标签，进 `candidates[].label`；标签本身不算歧义（单条 `前端: D:\x` 仍是 `repo-exists-ok`），
+  多条带标签的不同路径照旧 `repo-path-ambiguous`。
 - **相对路径**：没有基准目录就 `repo-path-relative-unresolved`，绝不把 `02_部署运维/…` 猜成巡检进程的 cwd。
 - **文件而非目录**：`exists: true` + `repo-not-a-directory`，两者不混淆。
 - **不可达**（断开的 `E:`、`EPERM` 等）与**不存在**分开：`repo-path-unreachable` vs `repo-missing`。
