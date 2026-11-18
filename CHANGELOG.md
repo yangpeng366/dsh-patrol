@@ -11,6 +11,17 @@
 
 ### Added
 
+- `scripts/local-json-round.ts` + `tests/local-json-round.spec.ts` + `docs/local-json-round.md`：在 `local-json`
+  源上**真跑一轮** Policy（`Engine` + `DirectionPolicy`，observe），把 `ignored` 按理由拆开，并算出「被仓库事实
+  拦住的行」占 `ignored` 的比例——`repo-path-ambiguous` / `repo-missing` 两种人改法不同的形状单独计数，
+  其余仓库事实合并成 `other`，allowlist 层（`repo-allowlist-unset` / `repo-not-autonomous`）不计入（那些行
+  根本没被探过）。转储先按 `BitableSource` 的列映射转成本地 JSON 再由 `LocalJsonSource` 读回，多段单元格只取
+  第一段（与源一致）并单独计数；`--any-repo` 是量仓库事实层的诊断开关，`--json` 带逐行 `decisions`。
+  不派发、不回写。rev 4419 实测：`rows=78 due=12 stopped=66`，`ignored=12` 里仓库事实 `1/12 = 8.3%`
+  （ambiguous 0、missing 0、`repo-not-cloned` 1），动作层 `11/12 = 91.7%`（needs-secret 4 / release 3 /
+  needs-decision 2 / field-ops 1 / unclear 1），`observed=0`。表级那 2 格 `repo-path-ambiguous` 都是停跑行，
+  排期就被挡下，所以进不了本轮的 `ignored`。
+
 - `repo-cell-audit` 的**按动作归类**：新增 `fixActionOf()` + `FIX_ACTIONS`，把 Gate 的拒绝词表翻成「人要做的事」——
   `fill-cell` / `write-absolute-path` / `point-to-directory` / `clone-repo` / `restore-path` /
   `drop-annotation` / `split-cell`。拒绝理由与人工改动不是一一对应（`repo-path-ambiguous` 既可能是「一仓夹注记」
