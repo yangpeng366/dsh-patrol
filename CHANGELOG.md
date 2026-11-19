@@ -11,6 +11,17 @@
 
 ### Added
 
+- `local-json-round` 的**动作层逐行报表**：`actionLayerRows()`（`scripts/local-json-round.ts`）把 `ignored`
+  里的动作层拒绝行（六个 `action-*` 理由） joins 回源行，对每行同时算两份读数——Gate 的
+  （`itemActionFact()`，列优先）和把 `动作类型` 清空后的纯词表读数，据此给出 `cellWritten` / `cellIsGap`
+  与 `proseKind`。报告新增 `--- held by the action layer, by row ---` 段：每行写 `cell=<kind>` 或
+  `cell=(blank)`，并注明「prose agrees; filling it changes nothing」/「a repo kind written here would win」，
+  头行给出 `cell already answers N/M | cell is the gap K/M`；`--json` 多一个 `actionRows`。
+  量的是「补『动作类型』列能不能把行翻成 observed」——列已写过时，补列是覆盖而不是补全。
+  rev 4419 实测：动作层 `11` 行里 **`cell is the gap 0/11`**，11 行的列值都与词表独立读数逐行相同，
+  所以「补列即可转 observed」在这个 due 集上是 0 条；能翻的只有 3 条「格子里夹带可执行动作」的行，
+  办法是改写/拆分 `下一步`。
+
 - `scripts/local-json-round.ts` + `tests/local-json-round.spec.ts` + `docs/local-json-round.md`：在 `local-json`
   源上**真跑一轮** Policy（`Engine` + `DirectionPolicy`，observe），把 `ignored` 按理由拆开，并算出「被仓库事实
   拦住的行」占 `ignored` 的比例——`repo-path-ambiguous` / `repo-missing` 两种人改法不同的形状单独计数，

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  actionLayerRows,
   cellOf,
   isMultiSegment,
   parseArgs,
@@ -30,6 +31,7 @@ import {
   REPO_FACT_REASONS,
 } from '../scripts/local-json-round.ts'
 import type { DecisionRecord } from '../src/core/engine.ts'
+import type { DirectionItem } from '../src/source/provider.ts'
 
 const script = fileURLToPath(new URL('../scripts/local-json-round.ts', import.meta.url))
 
@@ -131,6 +133,76 @@ describe('repoFactShare', () => {
     expect(REPO_FACT_REASONS).toContain('repo-empty-cell')
     expect(AMBIGUOUS_REASONS).toEqual(['repo-path-ambiguous'])
     expect(MISSING_REASONS).toEqual(['repo-missing'])
+  })
+})
+
+describe('actionLayerRows', () => {
+  /** A row complete enough for the action reading; no filesystem is touched by these cases. */
+  const item = (over: Record<string, unknown>): DirectionItem => ({
+    id: 'row',
+    title: 't',
+    description: '',
+    nextStep: '补一条策略测试',
+    priority: 'P2',
+    intervalMin: 1440,
+    repoPath: '',
+    threadId: null,
+    fake: false,
+    lastRun: null,
+    currentStage: '开发',
+    achievement: '',
+    authorization: '自主',
+    collaboration: 'sparse',
+    approval: '',
+    userNote: '',
+    contribution: '',
+    pendingAction: '',
+    category: '兴趣研究',
+    ...over,
+  }) as DirectionItem
+
+  it('marks a written cell as not the gap, and computes the prose reading anyway', () => {
+    // The cell says release and the prose says nothing about an action: the cell is the answer, so
+    // filling it in cannot be the fix — the row needs a different 下一步 or a deliberate override.
+    const rows = actionLayerRows(
+      [item({ id: 'row-written', nextStep: '把 §9 残余风险读一遍', actionType: 'release' })],
+      [decision('ignored', 'action-release', 'row-written')],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: 'row-written',
+      reason: 'action-release',
+      kind: 'release',
+      source: 'column',
+      proseKind: 'unclear',
+      cellWritten: true,
+      cellIsGap: false,
+    })
+  })
+
+  it('marks a blank cell as the gap: a repo kind written there would win over the prose', () => {
+    const rows = actionLayerRows(
+      [item({ id: 'row-blank', nextStep: '发版 0.2.0', actionType: '' })],
+      [decision('ignored', 'action-release', 'row-blank')],
+    )
+    expect(rows[0]).toMatchObject({ kind: 'release', source: 'text', proseKind: 'release', cellWritten: false, cellIsGap: true })
+  })
+
+  it('keeps a row whose source record vanished, so the row count still matches the tally', () => {
+    const rows = actionLayerRows([], [decision('ignored', 'action-needs-secret', 'row-gone')])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'row-gone', reason: 'action-needs-secret', kind: 'unclear' })
+  })
+
+  it('ignores decisions that are not the action layer, and rows that were not ignored', () => {
+    const rows = actionLayerRows(
+      [item({ id: 'row-a' }), item({ id: 'row-b' })],
+      [
+        decision('ignored', 'repo-missing', 'row-a'),
+        decision('observed', 'action-release', 'row-b'),
+      ],
+    )
+    expect(rows).toEqual([])
   })
 })
 

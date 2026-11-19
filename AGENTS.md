@@ -48,10 +48,10 @@ Trigger，在版本化 Policy 下过闸，通过的开 Ticket 并派发，最后
 | `schemas/item.schema.json` | item 契约（只作说明，刻意不写 enum） |
 | `scripts/release-check.mjs` | 发布自检：三道门 + 打包内容 + 解包 CLI 自检 + 版本一致 |
 | `scripts/policy-audit.mjs` | 读回决策日志，给出 counts / wouldAccept / stopped |
-| `scripts/local-json-round.ts` | 在 local-json 源上真跑一轮 Policy，算仓库事实占 `ignored` 的比例（`--any-repo` 只量事实层） |
+| `scripts/local-json-round.ts` | 在 local-json 源上真跑一轮 Policy，算仓库事实占 `ignored` 的比例（`--any-repo` 只量事实层）；并按行列出动作层拒绝行，逐行标出 `动作类型` 是否已写过（`cellIsGap`） |
 | `scripts/policy-triage-check.mjs` | 用同一份模块重算方向表，与 `docs/policy-v4-triage.md` 逐项核对 |
 | `docs/policy-v4-triage.md` | v4 口径、68 条逐条定性、实测数字与残余风险 |
-| `tests/` | 21 个文件 / 295 例，钉住闸门、词表、指纹、日志、审计 |
+| `tests/` | 21 个文件 / 299 例，钉住闸门、词表、指纹、日志、审计 |
 
 ## 4. 常用命令
 
@@ -59,7 +59,7 @@ Node ≥ 22.19（`node src/cli.ts` 直接跑 TypeScript 源码）。以下命令
 
 ```bash
 pnpm typecheck          # tsc --noEmit
-pnpm test               # vitest run（21 files / 295 tests）
+pnpm test               # vitest run（21 files / 299 tests）
 pnpm build              # tsdown → lib/index.js + lib/cli.js
 node scripts/release-check.mjs   # 0=PASS，1=某项检查失败，2=用法错；另有 --skip-steps / --keep-temp
 ```

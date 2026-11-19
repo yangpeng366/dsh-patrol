@@ -33,7 +33,8 @@ import { pathToFileURL } from 'node:url'
 import { newestDump, parseDump } from './repo-cell-audit.mjs'
 import { Engine, type DecisionRecord, type RoundSummary } from '../src/core/engine.ts'
 import { DirectionPolicy } from '../src/core/policy.ts'
-import { itemIsDue, itemIsStopped, itemToTrigger } from '../src/mapping.ts'
+import { inspectAction, type ActionKind, type ActionSource } from '../src/core/action-facts.ts'
+import { itemActionFact, itemIsDue, itemIsStopped, itemToTrigger } from '../src/mapping.ts'
 import { LocalJsonSource } from '../src/source/local-json.ts'
 import type { DirectionItem } from '../src/source/provider.ts'
 
@@ -91,6 +92,23 @@ export const REPO_FACT_REASONS = [
 export const AMBIGUOUS_REASONS = ['repo-path-ambiguous'] as const
 /** The half a human fixes by cloning or mounting the directory. */
 export const MISSING_REASONS = ['repo-missing'] as const
+
+/**
+ * The action layer's refusal reasons: rows whose repo is on disk and whose next step is not work an
+ * unattended round may do.
+ *
+ * Every one of these maps back to exactly one `ActionKind` (`action-facts.ts` `REFUSALS`), so the
+ * layer is countable from `reason` alone. They are listed here so a report can separate "held by
+ * what the row says it wants" from "held by where the row points".
+ */
+export const ACTION_LAYER_REASONS = [
+  'action-needs-secret',
+  'action-needs-config',
+  'action-release',
+  'action-field-ops',
+  'action-needs-decision',
+  'action-unclear',
+] as const
 
 export interface LocalJsonRoundArgs {
   tasksFile?: string
@@ -216,6 +234,94 @@ export function repoFactShare(tally: readonly { reason: string; count: number }[
   }
 }
 
+/**
+ * One row the action layer held, and whether the structured column is what stands in its way.
+ *
+ * The tally tells you the layer; this tells you the edit. `cellIsGap` is the whole question the
+ * direction row asks — "would writing `动作类型` turn this row into an `observed` sample?" — and it is
+ * answerable only by looking at the cell: a row whose cell already carries a kind is not helped by
+ * filling it in, because the prose that the word list reads is already the same kind. Such a row
+ * needs its `下一步` rewritten (or the cell deliberately overridden), not a blank filled.
+ */
+export interface ActionLayerRow {
+  id: string
+  reason: string
+  /** The kind the Gate judged, i.e. the cell's value when there is one. */
+  kind: ActionKind
+  /** `column` when the row has a written value, `text` when the word list had to answer. */
+  source: ActionSource | undefined
+  /** What the same row would be called with no cell at all — the prose half, always computed. */
+  proseKind: ActionKind
+  /** Whether the `动作类型` cell is written (a legal kind, or a bad value the Gate refused). */
+  cellWritten: boolean
+  /** Whether filling the cell is the fix, i.e. no kind is written and one could be. */
+  cellIsGap: boolean
+  title: string
+  nextStep: string
+}
+
+/**
+ * Joins the ignored decisions to their rows and asks, per row, whether the column is the gap.
+ *
+ * Both readings are computed from the same cells: the Gate's (`itemActionFact`, column first) and
+ * the prose-only one (`inspectAction` with a blank cell). Reporting both is the point — a row whose
+ * two readings agree is a row where "补列" cannot change anything, and that has to be visible per
+ * row, not inferred from a count.
+ *
+ * A decision whose row is no longer in the source is still reported: the row count has to match the
+ * tally, and a vanished row is a fact about the source, not a reason to drop the line.
+ */
+export function actionLayerRows(
+  items: readonly DirectionItem[],
+  decisions: readonly DecisionRecord[],
+): ActionLayerRow[] {
+  const byId = new Map(items.map((item) => [item.id, item]))
+  const rows: ActionLayerRow[] = []
+  for (const decision of decisions) {
+    if (decision.verdict !== 'ignored') continue
+    if (!(ACTION_LAYER_REASONS as readonly string[]).includes(decision.reason)) continue
+    const id = decision.recordId ?? decision.threadKey
+    const item = decision.recordId === undefined ? undefined : byId.get(decision.recordId)
+    if (!item) {
+      rows.push({
+        id,
+        reason: decision.reason,
+        kind: 'unclear',
+        source: decision.actionSource,
+        proseKind: 'unclear',
+        cellWritten: decision.actionSource === 'column',
+        cellIsGap: decision.actionSource !== 'column',
+        title: '',
+        nextStep: '',
+      })
+      continue
+    }
+    const written = itemActionFact(item)
+    const proseKind = inspectAction({
+      actionType: '',
+      nextStep: item.nextStep,
+      description: item.description,
+      userNote: item.userNote,
+      authorization: item.authorization,
+      contribution: item.contribution,
+      approval: item.approval,
+    }).kind
+    const cellWritten = written.source === 'column'
+    rows.push({
+      id,
+      reason: decision.reason,
+      kind: written.kind,
+      source: written.source,
+      proseKind,
+      cellWritten,
+      cellIsGap: !cellWritten,
+      title: item.title,
+      nextStep: item.nextStep,
+    })
+  }
+  return rows
+}
+
 export interface RoundCounts {
   rows: number
   due: number
@@ -226,6 +332,8 @@ export interface RoundCounts {
 export interface RoundResult {
   summary: RoundSummary
   decisions: DecisionRecord[]
+  /** The action-layer rows, named and classified — the half a human edits by prose. */
+  actionRows: ActionLayerRow[]
   counts: RoundCounts
 }
 
@@ -285,6 +393,7 @@ export async function runLocalJsonRound(options: {
   return {
     summary,
     decisions,
+    actionRows: actionLayerRows(items, decisions),
     counts: { rows: items.length, due: due.length, stopped: stopped.length, notDue: items.length - due.length - stopped.length },
   }
 }
@@ -345,6 +454,27 @@ export function renderReport(input: ReportInput): string {
     for (const decision of repoRows) {
       const id = decision.recordId ?? decision.threadKey
       lines.push(`  ${id}  ${decision.reason}`)
+    }
+  }
+  // The same rule for the action layer, plus the one fact that decides the edit: is the cell written?
+  const actionRows = input.result.actionRows
+  if (actionRows.length > 0) {
+    const gaps = actionRows.filter((row) => row.cellIsGap).length
+    lines.push('--- held by the action layer, by row ---')
+    lines.push(
+      `cell already answers ${actionRows.length - gaps}/${actionRows.length}  ` +
+        `| cell is the gap ${gaps}/${actionRows.length}  ` +
+        `(a written kind wins over the word list: only the gap rows are flipped by filling the column)`,
+    )
+    const width = Math.max(...actionRows.map((row) => row.reason.length))
+    for (const row of actionRows) {
+      const cell = row.cellWritten ? `cell=${row.kind}` : 'cell=(blank)'
+      const note = !row.cellWritten
+        ? 'a repo kind written here would win'
+        : row.proseKind === row.kind
+          ? 'prose agrees; filling it changes nothing'
+          : `prose=${row.proseKind}; the cell overrides it`
+      lines.push(`  ${row.id.padEnd(16)} ${row.reason.padEnd(width)}  ${cell.padEnd(18)} ${note}`)
     }
   }
   return lines.join('\n')
@@ -481,7 +611,7 @@ async function main(argv: string[]): Promise<number> {
   if (options.json) {
     // `decisions` is the per-row half: a script that wants to act on the tally needs the row ids,
     // and recomputing the round to get them would judge every row twice.
-    console.log(JSON.stringify({ source, dump, multiSegment, policy: options.policyVersion, acceptMode: options.acceptMode, repos: options.repos, anyRepo: options.anyRepo, counts: result.counts, summary: result.summary, tally, share, decisions: result.decisions }, null, 2))
+    console.log(JSON.stringify({ source, dump, multiSegment, policy: options.policyVersion, acceptMode: options.acceptMode, repos: options.repos, anyRepo: options.anyRepo, counts: result.counts, summary: result.summary, tally, share, actionRows: result.actionRows, decisions: result.decisions }, null, 2))
     return 0
   }
   console.log(renderReport(input))
