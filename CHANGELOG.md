@@ -11,6 +11,16 @@
 
 ### Added
 
+- `scripts/rewrite-rehearsal.ts` + `tests/rewrite-rehearsal.spec.ts` + `docs/local-json-round.md`：把 C 类 3 行的
+  「改写 `下一步` 能不能翻成 `repo-*`」变成可复跑的演练。每行四份读数——`now`（列优先）、`after`（改写后
+  清空 `动作类型`，只让词表判）、`after + cell`（保留原列值）、`control`（把触发拒绝的原句逐字塞回 `下一步`，
+  必须仍被拒，否则「翻」只是删词）。只读：不写表、不开 Ticket、不改文件；退出码 0 = 测量有效（对照组都回到
+  拒绝），翻几行是报告里的答案，不由退出码代判。rev 4419 实测：`prose flips 1/3 · controls refused 3/3 ·
+  rows that would be repo work 0/3`——`reczz28QOfrbeaIn` 词表翻到 `repo-code`（命中「写回」）但 `动作类型`
+  列写死 `release` 仍被拒；`reczz28SSxObE9Ec` 把「等人拍板」搬进 `用户批注` 后照样判 `decision`（该字段是
+  `decision` 的拒绝字段）；`recvuOzY5dp9MR` 被自己 2026-10-31 的「待批三问」历史批注钉住，去掉历史同一改写
+  才读到 `repo-doc`。结论写进 `docs/local-json-round.md`：3 行里没有一行靠改 `下一步` 就能进 observed。
+
 - `local-json-round` 的**动作层逐行报表**：`actionLayerRows()`（`scripts/local-json-round.ts`）把 `ignored`
   里的动作层拒绝行（六个 `action-*` 理由） joins 回源行，对每行同时算两份读数——Gate 的
   （`itemActionFact()`，列优先）和把 `动作类型` 清空后的纯词表读数，据此给出 `cellWritten` / `cellIsGap`

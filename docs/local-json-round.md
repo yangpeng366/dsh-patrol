@@ -110,6 +110,53 @@ interval=0，或者等词汇表长出第十个 kind。
 2. **A 类 6 行占一半以上**，说明这张表目前的 due 集里，能无人值守跑的本来就少；观测样本要靠 C 类
    那 3 行改写后产出，而不是靠放宽 Gate。
 
+## 2026-11-21：C 类 3 行改写演练——词表只翻得动 1 行
+
+上一轮把 C 类 3 行点名为「真能翻」，但那是一句关于词表的判断，没跑过。`scripts/rewrite-rehearsal.ts`
+把这 3 行当输入、把 Gate 自己的 `inspectAction()` 当判据，每行打四份读数：
+
+| 读数 | 怎么构造 | 回答什么 |
+| --- | --- | --- |
+| `now` | 表里的原行，列优先 | 今天被什么拒 |
+| `after` | 可执行的一半写成 `下一步`、等待的一半追加进 `用户批注`，`动作类型` 清空 | 词表能不能读到 `repo-*` |
+| `after + cell` | 同一改写，保留原 `动作类型` 值 | 列是否仍压过词表 |
+| `control` | 把原句里触发拒绝的那半句（`waitingHalf`，逐字）塞回 `下一步` | 若仍翻成 `repo-*`，「翻」只是删了词 |
+
+不带参数读 `.artifacts/direction` 下最新的转储；只读，不写表、不开 Ticket、不改文件。
+
+```
+rows 3 · prose flips 1/3 · controls refused 3/3 · rows that would be repo work 0/3
+RESULT: MEASURED (the flip tally above is the answer; every control went back to a refusal)
+```
+
+| record | now | after（纯词表） | after + 列 | control | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| `recvuOzY5dp9MR` | `secret`（列）· `secret`［凭证］ | `decision`［待批］ | `secret` | `secret`［凭证］ | 翻不动：被自己的历史批注钉住 |
+| `reczz28QOfrbeaIn` | `release`（列）· `release`［上线］ | `repo-code`［写回］ | `release` | `release`［上线］ | 词表翻了，列没翻 |
+| `reczz28SSxObE9Ec` | `secret`（列）· `secret`［token］ | `decision`［拍板］ | `secret` | `field-ops`［现场］ | 翻不动：搬去的那半句自带「拍板」 |
+
+三条结论，都是读出来的，不是推的：
+
+1. **列压过词表，所以「改行」是改两格。** 唯一在词表层面翻成功的是 `reczz28QOfrbeaIn`
+   （`release` → `repo-code`，命中「写回」，对照组回到 `release`），但它的 `动作类型` 单元格写死
+   `release`，Gate 读的仍是列，行照旧被拒。改写 `下一步` 而不改 `动作类型`，等于只改了一半；而第二格是
+   人的判断（「这半句还算不算发布」），脚本不代填。
+2. **「把等拍板那半句挪进用户批注」这条建议只对一半的等待成立。** `用户批注` 是 `decision` 的拒绝字段
+   （`action-facts.ts` 的 `FIELD_ROLES`），所以 `reczz28SSxObE9Ec` 把「等人拍板」搬进去之后照样判
+   `decision`；搬走「现场」「上线」「凭证」才有效，因为那三类词不扫 `用户批注`。
+   `recvuOzY5dp9MR` 更直接：它的原始 `用户批注` 里有「2026-10-31 待批三问」，把历史一起去掉后同一份改写
+   就读到 `repo-doc`［笔记］——这行不是「`下一步` 写得不好」，是一条历史批注把它永久钉在 `decision`。
+3. **三行都是复合行，改写治不了。** `recvuOzY5dp9MR` 把「扫窗口出候选」「写笔记」「凭证口径」装在一格，
+   `reczz28SSxObE9Ec` 把「现场导日志」「补单测」「待拍板的跨仓改造」装在一格；`reczz28QOfrbeaIn` 同理。
+   要它们进 `auto`，得拆成两行——那是改表结构，走审批，不是脚本能替的。
+
+另外一处与词表无关、但会立刻咬人的事实：`reczz28QOfrbeaIn` 的 `仓库路径` 指向 vault，而这一步要改的
+巡检脚本在 `D:\_codex-control`（本机存在）。词表翻成 `repo-code` 之后，Ticket 的 scope 仍是 vault，改动会
+落在 scope 之外——`repo-*` 只回答「这类活能不能无人值守做」，不回答「这个仓对不对」。
+
+所以这一轮的答案是：C 类 3 行里**没有一行**靠改写 `下一步` 就能进 observed；1 行差一格（`动作类型`），
+2 行差一次拆行，3 行全差一个正确的 `仓库路径`。表没有被写一个字。
+
 ## 与其它脚本的分工
 
 | 脚本 | 回答的问题 | 是否判行 |
@@ -117,6 +164,7 @@ interval=0，或者等词汇表长出第十个 kind。
 | `repo-cell-audit.mjs` | 表级：`仓库路径` 每格是什么状态、人要做哪一步 | 否（只看格） |
 | `policy-audit.mjs` | 历史：决策日志里都拒了什么、停跑行有哪些 | 否（读日志） |
 | `local-json-round.ts` | 当下：这一轮 due 行里，仓库事实占 `ignored` 多少 | 是（真跑 Gate） |
+| `rewrite-rehearsal.ts` | 假设：把 `下一步` 改写后，词表会不会读到 `repo-*`；列是否仍压过它 | 否（只看给定改写，不跑轮） |
 | `shadow-run.mjs` | 同上，但直连 Bitable 源、需要 lark 身份 | 是 |
 
 ## 退出码
