@@ -11,6 +11,22 @@
 
 ### Added
 
+- `scripts/scope-audit.ts` + `tests/scope-audit.spec.ts` + `docs/split-proposals.md`：量「行的 `仓库路径` 是不是它
+  `下一步` 真正动的目录」。判据只一条——`下一步` 里写出、且磁盘上真实存在的目录，是否落在该行 `仓库路径`
+  的候选目录里；不存在的 token 单列 `unreadable`，永不计入 `drift`（散文噪声不是事实）。四种判定分开：
+  `aligned` / `drift` / `no-root`（写了目录但格里没有仓）/ `silent`（一个目录都没写）。rev 4419 实测：
+  `rows 78 · aligned 3 · drift 3 · no-root 2 · silent 70`，due 集 `12 · aligned 0 · drift 0 · no-root 0 · silent 12`
+  ——所以「不一致」的答案只能是下界（3 行），due 集 12 行全部不可判定；`reczz28QOfrbeaIn` 那种「仓写 vault、
+  脚本在 `D:\_codex-control`」的错落在 `silent` 里，本脚本抓不到，是 `silent` 这个类本身在说话。
+
+- `rewrite-rehearsal` 的**拆行提案**（`rehearseSplits()`，同脚本同测试）：两行 C 类各拆成「仓内半行 + 等人
+  半行」，四个半行都按 Gate 的 `inspectAction()` 读（带列 / 纯词表各一次），并核对每个半行引用的段落都是原行
+  `下一步` 的逐字子串——提案只能搬动原行写过的事，加一件新活会以 `clauses not traceable` 变红。
+  rev 4419 实测：`splits 2 · in-repo halves dispatchable 2/2 · waiting halves refused 2/2 · clauses not traceable 0`；
+  仓内半行分别读成 `repo-doc` / `repo-test`（后者纯词表只有 `repo-code`，要写 `动作类型` 才读成测试），
+  等人半行分别被 `secret` / `field-ops` 拒且 `巡检间隔 0`。提案全文与字段值在 `docs/split-proposals.md`，
+  **未在表里建行**。
+
 - `scripts/rewrite-rehearsal.ts` + `tests/rewrite-rehearsal.spec.ts` + `docs/local-json-round.md`：把 C 类 3 行的
   「改写 `下一步` 能不能翻成 `repo-*`」变成可复跑的演练。每行四份读数——`now`（列优先）、`after`（改写后
   清空 `动作类型`，只让词表判）、`after + cell`（保留原列值）、`control`（把触发拒绝的原句逐字塞回 `下一步`，

@@ -577,7 +577,7 @@ the same table share nothing. Run one instance per repo set.
 read by `tests/contract.spec.ts` and `tests/schema-parity.spec.ts`, never by `lib/index.js`, whose
 only file read is `../skills/<name>/SKILL.md` (`lib/index.js:886`).
 - `scripts/` holds maintainer tools (`shadow-run.mjs`, `policy-audit.mjs`, `same-repo-rehearsal.ts`,
-`repo-cell-audit.mjs`, `local-json-round.ts`, `rewrite-rehearsal.ts`). A packaged install has no
+`repo-cell-audit.mjs`, `local-json-round.ts`, `rewrite-rehearsal.ts`, `scope-audit.ts`). A packaged install has no
 `scripts/` directory, so run them from a clone.
 
 ### 6. Uninstall
@@ -593,11 +593,11 @@ if you no longer want the history. Tickets live in memory only, so a restart sta
 
 ```bash
 pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest run — 306 tests
+pnpm test        # vitest run — 326 tests
 pnpm build       # tsdown
 ```
 
-Current state: typecheck clean, 306 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
+Current state: typecheck clean, 326 tests pass, build produces `lib/index.js` + `lib/index.d.ts`.
 
 CI runs these four steps on every push to `main` and every pull request, on a clean `ubuntu-latest`
 runner with Node 22 (`.github/workflows/verify.yml`): `pnpm install --frozen-lockfile`, then

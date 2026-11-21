@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { parseArgs, rehearseRecords, renderReport } from '../scripts/rewrite-rehearsal.ts'
+import { parseArgs, rehearseRecords, rehearseSplits, renderReport } from '../scripts/rewrite-rehearsal.ts'
 
 /** One dump row with the columns `normalizeItem()` reads; the rest default. */
 function record(id: string, cells: { nextStep: string; userNote?: string; actionType?: string }): Record<string, unknown> {
@@ -105,5 +105,75 @@ describe('rewrite rehearsal', () => {
     expect(parseArgs(['--dump', 'x.ndjson', '--json'])).toEqual({ dump: 'x.ndjson', json: true, help: false })
     expect(() => parseArgs(['--dump'])).toThrow(/--dump/)
     expect(() => parseArgs(['--wat'])).toThrow(/unknown argument/)
+  })
+})
+
+/**
+ * The split proposals: two rows cut into "the half a round can do" and "the half that waits".
+ *
+ * The scope reading is injected, because whether `D:\BaiduSyncdisk\...` and `E:\repos\...` exist is
+ * a fact about the machine running the test, not about the proposal. The two properties that must
+ * hold anywhere are pinned here: the in-repo half reads as repo work, and every clause of it was
+ * written by the row itself (`lost` stays empty).
+ */
+const SPLIT_ROWS: Record<string, unknown>[] = [
+  record('recvuOzY5dp9MR', {
+    nextStep: '扫 11-03 白天窗口出候选；若 A/B/C 仍未批复，则把 R75 遗留 4 条事实升级为 1 篇 note + MEMORY 行（ActiveMQ 凭证优先）',
+    actionType: 'secret',
+  }),
+  record('reczz28SSxObE9Ec', {
+    nextStep:
+      '1) 现场导一次退出时刻的 articleeditor pod 全量日志，确认「回调必留日志」现场侧仍空；2) 继续补自检：applyTokenSite（用 token 的 user_info.site 覆盖请求头站点）仍无单测，可同样抽成纯函数；3) 待用户拍板的跨仓动作：恢复 frame 门户退出时的批量子系统登出，并核对现场 sc_frame.sys_config；4) 复测口径仍需知情：认证中心登出通知是异步的。',
+    actionType: 'secret',
+  }),
+  record('reczz28QOfrbeaIn', {
+    nextStep: '一、上线首轮盯 [preflight] 日志；二、定口径；三、继续找静默降级缺口。',
+    actionType: 'release',
+  }),
+]
+
+describe('split proposals', () => {
+  const aligned = () => ({ verdict: 'aligned' as const, roots: [], named: [], outside: [] })
+  const splits = rehearseSplits(SPLIT_ROWS, { scope: aligned })
+
+  it('cuts the two rows that hold two jobs, and only those', () => {
+    expect(splits.map((split) => split.source)).toEqual(['recvuOzY5dp9MR', 'reczz28SSxObE9Ec'])
+    expect(splits.every((split) => split.halves.length === 2)).toBe(true)
+    expect(splits.flatMap((split) => split.halves.map((half) => half.role))).toEqual([
+      'in-repo',
+      'waiting',
+      'in-repo',
+      'waiting',
+    ])
+  })
+
+  it('makes the in-repo half dispatchable and leaves the waiting half refused', () => {
+    for (const split of splits) {
+      const [inRepo, waiting] = split.halves
+      expect(inRepo?.repoWork).toBe(true)
+      expect(inRepo?.intervalMin).toBeGreaterThan(0)
+      expect(waiting?.repoWork).toBe(false)
+      expect(waiting?.intervalMin).toBe(0)
+    }
+  })
+
+  it('takes every clause from the row it splits', () => {
+    expect(splits.flatMap((split) => split.lost)).toEqual([])
+  })
+
+  it('catches a proposal that invents a clause the row never wrote', () => {
+    // The shortened row in the rewrite fixture is enough: its `下一步` no longer contains the clauses
+    // the split quotes, so the proposal would be adding work rather than moving it.
+    const lost = rehearseSplits(ROWS, { scope: aligned }).flatMap((split) => split.lost)
+    expect(lost.length).toBeGreaterThan(0)
+  })
+
+  it('prints both halves with where each one acts', () => {
+    const report = renderReport('fixture.ndjson', rehearseRecords(SPLIT_ROWS), splits)
+    expect(report).toContain('--- split proposals (no row is created by this script) ---')
+    expect(report).toContain('splits 2 · in-repo halves dispatchable 2/2 · waiting halves refused 2/2 · clauses not traceable 0')
+    expect(report).toContain('[in-repo] session-memory-curator｜仓内半行')
+    expect(report).toContain('[waiting] 多媒体-登出串号｜等人半行')
+    expect(report).toContain('动作类型 repo-test · 巡检间隔 1440 · 仓库路径 E:\\repos\\gitAll\\articleeditor-tmp')
   })
 })

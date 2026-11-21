@@ -157,11 +157,31 @@ RESULT: MEASURED (the flip tally above is the answer; every control went back to
 所以这一轮的答案是：C 类 3 行里**没有一行**靠改写 `下一步` 就能进 observed；1 行差一格（`动作类型`），
 2 行差一次拆行，3 行全差一个正确的 `仓库路径`。表没有被写一个字。
 
+## 2026-11-21（二）：拆行提案落地成数据，并量「仓库路径 vs 动作目录」
+
+上一轮把两行点名为「得拆」，本轮把那句话变成可复跑的读数：
+
+1. `scripts/rewrite-rehearsal.ts` 多了一节 `--- split proposals ---`：两行 C 类各拆成「仓内半行 + 等人半行」，
+   每个半行按 Gate 自己的 `inspectAction()` 读一遍（带列 / 纯词表各一次），并核对它引用的每一段都是原行
+   `下一步` 的逐字子串（`clauses not traceable 0`）。提案全文与字段值在 `docs/split-proposals.md`；
+   **没有建行**——拆行是改表结构，走审批。实测：`in-repo halves dispatchable 2/2 · waiting halves refused 2/2`。
+2. `scripts/scope-audit.ts` 回答另一个此前没人量的格子：行的 `仓库路径` 是不是它 `下一步` 真正动的目录。
+   全表 `drift 3 / no-root 2 / silent 70`；due 集 12 行 **`silent 12`（一行都没写目录）**——所以不一致的
+   答案只能是下界：「3 行不一致，另 12 行不可判定」，而不是「3 行」。
+
+两条留给下一轮的事实：
+
+- **`silent` 是这张表的常态，不是清单里的省略。** 想让仓库路径可自动复核，行的 `下一步` 得写出它要动的
+  目录；`reczz28QOfrbeaIn` 那种「仓写 vault、脚本在 `D:\_codex-control`」的错，永远只会在 `silent` 里。
+- **拆行后要立刻量 `observed`，不是量表格。** 建行的目的就是把 observe 的样本从 0 抬起来；建议建行后同一轮跑
+  `local-json-round.ts --dump --any-repo`，看 `observed` 是否变正。
+
 ## 与其它脚本的分工
 
 | 脚本 | 回答的问题 | 是否判行 |
 |---|---|---|
 | `repo-cell-audit.mjs` | 表级：`仓库路径` 每格是什么状态、人要做哪一步 | 否（只看格） |
+| `scope-audit.ts` | 行级：这行的 `下一步` 动的目录在不在它自己的仓里 | 是（只读两个格） |
 | `policy-audit.mjs` | 历史：决策日志里都拒了什么、停跑行有哪些 | 否（读日志） |
 | `local-json-round.ts` | 当下：这一轮 due 行里，仓库事实占 `ignored` 多少 | 是（真跑 Gate） |
 | `rewrite-rehearsal.ts` | 假设：把 `下一步` 改写后，词表会不会读到 `repo-*`；列是否仍压过它 | 否（只看给定改写，不跑轮） |
